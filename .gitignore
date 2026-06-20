@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+default.profraw
+*.profraw
+*.xcresult
+dist/
+release/
+build/

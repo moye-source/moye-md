@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Package macOS app
+        id: package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZIP_PATH="$(./scripts/package-macos.sh "$VERSION")"
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.package.outputs.zip_path }}" \
+            --title "Moye ${GITHUB_REF_NAME}" \
+            --notes "Download the macOS app zip below. This build is currently unsigned and may require manual approval in macOS Gatekeeper."
