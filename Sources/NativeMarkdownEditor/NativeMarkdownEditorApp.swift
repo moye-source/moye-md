@@ -4,7 +4,13 @@ import SwiftUI
 @main
 struct NativeMarkdownEditorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var documentStore = DocumentStore()
+    @StateObject private var documentStore: DocumentStore
+
+    init() {
+        let store = DocumentStore(initialDocumentURL: AppLaunchURLResolver.firstOpenableFileURL())
+        _documentStore = StateObject(wrappedValue: store)
+        appDelegate.documentStore = store
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -23,6 +29,35 @@ struct NativeMarkdownEditorApp: App {
             SettingsView()
                 .environmentObject(documentStore)
         }
+    }
+}
+
+enum AppLaunchURLResolver {
+    static func firstOpenableFileURL(arguments: [String] = ProcessInfo.processInfo.arguments) -> URL? {
+        arguments.dropFirst().compactMap(fileURL(fromArgument:)).first
+    }
+
+    private static func fileURL(fromArgument argument: String) -> URL? {
+        guard !argument.hasPrefix("-") else {
+            return nil
+        }
+
+        let url: URL
+        if
+            argument.hasPrefix("file://"),
+            let fileURL = URL(string: argument),
+            fileURL.isFileURL
+        {
+            url = fileURL
+        } else {
+            url = URL(fileURLWithPath: argument)
+        }
+
+        let standardizedURL = url.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: standardizedURL.path) else {
+            return nil
+        }
+        return standardizedURL
     }
 }
 
@@ -401,8 +436,14 @@ private struct WindowHelpCommandSet: Commands {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    weak var documentStore: DocumentStore?
+    weak var documentStore: DocumentStore? {
+        didSet {
+            flushPendingOpenURLs()
+        }
+    }
+    private var pendingOpenURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -414,15 +455,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 window.makeKeyAndOrderFront(nil)
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            MainMenuLocalizer.localize(language: .chinese)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            MainMenuLocalizer.localize(language: .chinese)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            MainMenuLocalizer.localize(language: .chinese)
-        }
+        scheduleMenuLocalizationRetries()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        scheduleMenuLocalizationRetries()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -438,11 +475,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         return documentStore?.confirmDiscardUnsavedChangesIfNeeded() ?? true
     }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        openURLs(urls)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        openURLs([URL(fileURLWithPath: filename)])
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        let didOpen = openURLs(filenames.map(URL.init(fileURLWithPath:)))
+        sender.reply(toOpenOrPrint: didOpen ? .success : .failure)
+    }
+
+    @discardableResult
+    private func openURLs(_ urls: [URL]) -> Bool {
+        let fileURLs = urls.filter { $0.isFileURL }
+        guard !fileURLs.isEmpty else {
+            return false
+        }
+
+        guard let documentStore else {
+            pendingOpenURLs.append(contentsOf: fileURLs)
+            return true
+        }
+
+        for url in fileURLs {
+            if documentStore.openDocument(at: url) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func flushPendingOpenURLs() {
+        guard !pendingOpenURLs.isEmpty else {
+            return
+        }
+        let urls = pendingOpenURLs
+        pendingOpenURLs.removeAll()
+        openURLs(urls)
+    }
+
+    private func scheduleMenuLocalizationRetries() {
+        for delay in [0.2, 1.0, 2.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainMenuLocalizer.localize(language: self?.documentStore?.language ?? .chinese)
+            }
+        }
+    }
 }
 
 enum MainMenuLocalizer {
     static func localizeChinese() {
         localize(language: .chinese)
+    }
+
+    static func localizedTitle(_ title: String, language: AppLanguage) -> String {
+        let strings = LocalizedStrings(language: language)
+        return menuTitleReplacements(for: strings)[title] ?? title
     }
 
     static func localize(language: AppLanguage) {
@@ -452,7 +544,54 @@ enum MainMenuLocalizer {
 
         let strings = LocalizedStrings(language: language)
         let appName = strings.appName
-        let replacements: [String: String] = [
+        let replacements = menuTitleReplacements(for: strings)
+
+        func apply(to menu: NSMenu) {
+            for item in menu.items {
+                if let replacement = replacements[item.title] {
+                    item.title = replacement
+                }
+                if let submenu = item.submenu {
+                    if let replacement = replacements[submenu.title] {
+                        submenu.title = replacement
+                    }
+                    apply(to: submenu)
+                }
+            }
+        }
+
+        func setTopLevel(_ item: NSMenuItem, title: String) {
+            item.title = title
+            item.submenu?.title = title
+        }
+
+        for (index, item) in mainMenu.items.enumerated() {
+            switch index {
+            case 0:
+                setTopLevel(item, title: appName)
+            case 1:
+                setTopLevel(item, title: strings.file)
+            case 2:
+                setTopLevel(item, title: strings.edit)
+            case 3:
+                setTopLevel(item, title: strings.view)
+            default:
+                if ["Window", "窗口"].contains(item.title) {
+                    setTopLevel(item, title: strings.window)
+                } else if ["Help", "帮助"].contains(item.title) {
+                    setTopLevel(item, title: strings.help)
+                } else if ["View", "视图", "显示"].contains(item.title) {
+                    setTopLevel(item, title: strings.view)
+                }
+            }
+        }
+
+        apply(to: mainMenu)
+    }
+
+    private static func menuTitleReplacements(for strings: LocalizedStrings) -> [String: String] {
+        let appName = strings.appName
+        return [
             "NativeMarkdownEditor": appName,
             "Native Markdown Editor": appName,
             "Moye": appName,
@@ -463,6 +602,7 @@ enum MainMenuLocalizer {
             "编辑": strings.edit,
             "View": strings.view,
             "视图": strings.view,
+            "显示": strings.view,
             "Window": strings.window,
             "窗口": strings.window,
             "Help": strings.help,
@@ -506,45 +646,5 @@ enum MainMenuLocalizer {
             "Bring All to Front": strings.bringAllToFront,
             "全部置于前台": strings.bringAllToFront,
         ]
-
-        func apply(to menu: NSMenu) {
-            for item in menu.items {
-                if let replacement = replacements[item.title] {
-                    item.title = replacement
-                }
-                if let submenu = item.submenu {
-                    if let replacement = replacements[submenu.title] {
-                        submenu.title = replacement
-                    }
-                    apply(to: submenu)
-                }
-            }
-        }
-
-        func setTopLevel(_ item: NSMenuItem, title: String) {
-            item.title = title
-            item.submenu?.title = title
-        }
-
-        for (index, item) in mainMenu.items.enumerated() {
-            switch index {
-            case 0:
-                setTopLevel(item, title: appName)
-            case 1:
-                setTopLevel(item, title: strings.file)
-            case 2:
-                setTopLevel(item, title: strings.edit)
-            case 3:
-                setTopLevel(item, title: strings.view)
-            default:
-                if ["Window", "窗口"].contains(item.title) {
-                    setTopLevel(item, title: strings.window)
-                } else if ["Help", "帮助"].contains(item.title) {
-                    setTopLevel(item, title: strings.help)
-                }
-            }
-        }
-
-        apply(to: mainMenu)
     }
 }

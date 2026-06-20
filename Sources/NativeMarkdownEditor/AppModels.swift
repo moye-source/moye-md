@@ -27,6 +27,7 @@ struct LocalizedStrings {
     var general: String { text("通用", "General") }
     var editor: String { text("编辑器", "Editor") }
     var assets: String { text("资源", "Assets") }
+    var performance: String { text("性能", "Performance") }
     var done: String { text("完成", "Done") }
     var interfaceLanguage: String { text("界面语言", "Interface Language") }
     var chinese: String { "中文" }
@@ -55,7 +56,7 @@ struct LocalizedStrings {
     var replace: String { text("替换...", "Replace...") }
     var findNext: String { text("查找下一个", "Find Next") }
     var findPrevious: String { text("查找上一个", "Find Previous") }
-    var view: String { text("视图", "View") }
+    var view: String { text("显示", "View") }
     var viewMode: String { text("视图模式", "View Mode") }
     var theme: String { text("主题", "Theme") }
     var showSidebar: String { text("显示侧栏", "Show Sidebar") }
@@ -123,6 +124,19 @@ struct LocalizedStrings {
     var disableAutoPair: String { text("关闭自动配对", "Disable Auto Pair") }
     var copyImagesToAssets: String { text("复制图片到 Assets", "Copy Images to Assets") }
     var keepOriginalImagePaths: String { text("保留原图片路径", "Keep Original Image Paths") }
+    var performanceDiagnostics: String { text("性能诊断", "Performance Diagnostics") }
+    var performanceDiagnosticsHelp: String {
+        text(
+            "默认开启，只记录最近的性能事件和计数信息，不记录正文内容。遇到卡顿时复制报告即可。",
+            "Enabled by default. It records recent performance events and counters, not document body content. Copy the report when lag appears."
+        )
+    }
+    var copyPerformanceReport: String { text("复制性能报告", "Copy Performance Report") }
+    var resetPerformanceRecords: String { text("清空性能记录", "Clear Performance Records") }
+    var copiedPerformanceReport: String { text("已复制性能报告", "Copied performance report") }
+    var resetPerformanceRecordsDone: String { text("已清空性能记录", "Cleared performance records") }
+    var enabledPerformanceDiagnostics: String { text("性能诊断已开启", "Performance diagnostics enabled") }
+    var disabledPerformanceDiagnostics: String { text("性能诊断已关闭", "Performance diagnostics disabled") }
     var insertTable: String { text("插入表格", "Insert Table") }
     var addRowAbove: String { text("上方加一行", "Add Row Above") }
     var addRowBelow: String { text("下方加一行", "Add Row Below") }
@@ -328,17 +342,6 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .split:
-            "Split"
-        case .editor:
-            "Editor"
-        case .preview:
-            "Preview"
-        }
-    }
-
     var systemImage: String {
         switch self {
         case .split:
@@ -359,19 +362,6 @@ enum PreviewTheme: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .system:
-            "System"
-        case .light:
-            "Light"
-        case .dark:
-            "Dark"
-        case .sepia:
-            "Sepia"
-        }
-    }
-
     var cssClass: String {
         "theme-\(rawValue)"
     }
@@ -383,6 +373,49 @@ struct OutlineItem: Identifiable, Equatable {
     let title: String
     let location: Int
     let line: Int
+}
+
+struct DocumentStatistics: Equatable {
+    let wordCount: Int
+    let characterCount: Int
+    let lineCount: Int
+
+    var readingMinutes: Int {
+        max(1, Int(ceil(Double(wordCount) / 220.0)))
+    }
+
+    static let empty = DocumentStatistics(wordCount: 0, characterCount: 0, lineCount: 1)
+
+    init(markdown: String) {
+        var words = 0
+        var characters = 0
+        var lines = 1
+        var isInsideWord = false
+
+        for character in markdown {
+            characters += 1
+            if character == "\n" {
+                lines += 1
+            }
+
+            if character.isWhitespace || character.isNewline {
+                isInsideWord = false
+            } else if !isInsideWord {
+                words += 1
+                isInsideWord = true
+            }
+        }
+
+        wordCount = words
+        characterCount = characters
+        lineCount = lines
+    }
+
+    init(wordCount: Int, characterCount: Int, lineCount: Int) {
+        self.wordCount = wordCount
+        self.characterCount = characterCount
+        self.lineCount = lineCount
+    }
 }
 
 struct WorkspaceFile: Identifiable, Equatable {

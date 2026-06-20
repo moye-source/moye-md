@@ -17,6 +17,11 @@
 		A10000000000000000000008 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* MarkdownRenderer.swift */; };
 		A10000000000000000000009 /* MarkdownSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* MarkdownSyntaxHighlighter.swift */; };
 		A1000000000000000000000A /* NativeMarkdownEditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A /* NativeMarkdownEditorApp.swift */; };
+		A1000000000000000000001C /* MarkdownBlockIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003B /* MarkdownBlockIndex.swift */; };
+		A1000000000000000000001D /* PerformanceDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003C /* PerformanceDiagnostics.swift */; };
+		A1000000000000000000001E /* RegexCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003D /* RegexCache.swift */; };
+		A1000000000000000000001F /* SourceLineIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003E /* SourceLineIndex.swift */; };
+		A1000000000000000000004A /* PieceTableTextBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000004B /* PieceTableTextBuffer.swift */; };
 		A1000000000000000000000B /* MarkdownEditorInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B /* MarkdownEditorInputTests.swift */; };
 		A1000000000000000000000C /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002C /* XCTest.framework */; };
 		A1000000000000000000000F /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002E /* InfoPlist.strings */; };
@@ -46,6 +51,11 @@
 		A10000000000000000000028 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
 		A10000000000000000000029 /* MarkdownSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		A1000000000000000000002A /* NativeMarkdownEditorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMarkdownEditorApp.swift; sourceTree = "<group>"; };
+		A1000000000000000000003B /* MarkdownBlockIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlockIndex.swift; sourceTree = "<group>"; };
+		A1000000000000000000003C /* PerformanceDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceDiagnostics.swift; sourceTree = "<group>"; };
+		A1000000000000000000003D /* RegexCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegexCache.swift; sourceTree = "<group>"; };
+		A1000000000000000000003E /* SourceLineIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLineIndex.swift; sourceTree = "<group>"; };
+		A1000000000000000000004B /* PieceTableTextBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PieceTableTextBuffer.swift; sourceTree = "<group>"; };
 		A1000000000000000000002B /* MarkdownEditorInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEditorInputTests.swift; sourceTree = "<group>"; };
 		A1000000000000000000002C /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 		A1000000000000000000002D /* NativeMarkdownEditorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NativeMarkdownEditorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -103,6 +113,11 @@
 				A10000000000000000000027 /* MarkdownPreviewView.swift */,
 				A10000000000000000000028 /* MarkdownRenderer.swift */,
 				A10000000000000000000029 /* MarkdownSyntaxHighlighter.swift */,
+				A1000000000000000000003B /* MarkdownBlockIndex.swift */,
+				A1000000000000000000003C /* PerformanceDiagnostics.swift */,
+				A1000000000000000000004B /* PieceTableTextBuffer.swift */,
+				A1000000000000000000003D /* RegexCache.swift */,
+				A1000000000000000000003E /* SourceLineIndex.swift */,
 				A1000000000000000000002A /* NativeMarkdownEditorApp.swift */,
 				A1000000000000000000002E /* InfoPlist.strings */,
 				A1000000000000000000002F /* InfoPlist.strings */,
@@ -255,6 +270,11 @@
 				A10000000000000000000007 /* MarkdownPreviewView.swift in Sources */,
 				A10000000000000000000008 /* MarkdownRenderer.swift in Sources */,
 				A10000000000000000000009 /* MarkdownSyntaxHighlighter.swift in Sources */,
+				A1000000000000000000001C /* MarkdownBlockIndex.swift in Sources */,
+				A1000000000000000000001D /* PerformanceDiagnostics.swift in Sources */,
+				A1000000000000000000004A /* PieceTableTextBuffer.swift in Sources */,
+				A1000000000000000000001E /* RegexCache.swift in Sources */,
+				A1000000000000000000001F /* SourceLineIndex.swift in Sources */,
 				A1000000000000000000000A /* NativeMarkdownEditorApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -287,12 +307,12 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh-Hans";
-				INFOPLIST_KEY_CFBundleDisplayName = "墨页";
+				INFOPLIST_KEY_CFBundleDisplayName = "墨页 Dev";
 				INFOPLIST_KEY_CFBundleLocalizations = (
 					"zh-Hans",
 					en,
 				);
-				INFOPLIST_KEY_CFBundleName = "墨页";
+				INFOPLIST_KEY_CFBundleName = "墨页 Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -301,8 +321,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.moyesource.moye;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = org.moyesource.moye.dev;
+				PRODUCT_MODULE_NAME = NativeMarkdownEditor;
+				PRODUCT_NAME = "Moye Dev";
 				SDKROOT = macosx;
 				SWIFT_VERSION = 5.0;
 			};
@@ -352,11 +373,11 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.moyesource.moyeTests;
+				PRODUCT_BUNDLE_IDENTIFIER = org.moyesource.moye.devTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NativeMarkdownEditor.app/Contents/MacOS/NativeMarkdownEditor";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Moye Dev.app/Contents/MacOS/Moye Dev";
 			};
 			name = Debug;
 		};

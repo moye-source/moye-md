@@ -1,5 +1,11 @@
 import SwiftUI
 
+private enum SidebarLayout {
+    static let leadingPadding: CGFloat = 44
+    static let trailingPadding: CGFloat = 16
+    static let scrollViewTrailingCompensation: CGFloat = 16
+}
+
 struct ContentView: View {
     @EnvironmentObject private var documentStore: DocumentStore
 
@@ -7,7 +13,7 @@ struct ContentView: View {
         HSplitView {
             if documentStore.isSidebarVisible {
                 SidebarView()
-                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 480)
+                    .frame(minWidth: 320, idealWidth: 360, maxWidth: 500)
             }
 
             WorkspaceView()
@@ -65,30 +71,27 @@ private struct WorkspaceView: View {
     }
 
     private var editorPane: some View {
-        HStack(spacing: 0) {
-            if documentStore.lineNumbersEnabled {
-                EditorLineNumberColumn(lineCount: documentStore.lineCount)
-            }
-
-            MarkdownEditorView(
-                text: $documentStore.markdown,
-                selectedRange: $documentStore.selectedRange,
-                focusModeEnabled: documentStore.focusModeEnabled,
-                typewriterModeEnabled: documentStore.typewriterModeEnabled,
-                lineNumbersEnabled: false,
-                autoPairEnabled: documentStore.autoPairEnabled,
-                scrollTarget: editorScrollTarget,
-                onVisibleSourceLineChange: syncEditorToPreview,
-                onInsertImageURLs: documentStore.insertImageURLs,
-                onPasteImage: documentStore.insertImageFromPasteboard
-            )
-        }
+        MarkdownEditorView(
+            text: $documentStore.markdown,
+            selectedRange: $documentStore.selectedRange,
+            contentRevision: documentStore.documentRevision,
+            focusModeEnabled: documentStore.focusModeEnabled,
+            typewriterModeEnabled: documentStore.typewriterModeEnabled,
+            lineNumbersEnabled: documentStore.lineNumbersEnabled,
+            autoPairEnabled: documentStore.autoPairEnabled,
+            scrollTarget: editorScrollTarget,
+            onTextEdit: documentStore.applyEditorTextEdit,
+            onVisibleSourceLineChange: syncEditorToPreview,
+            onInsertImageURLs: documentStore.insertImageURLs,
+            onPasteImage: documentStore.insertImageFromPasteboard
+        )
         .frame(minWidth: 360)
     }
 
     private var previewPane: some View {
         MarkdownPreviewView(
             markdown: documentStore.markdown,
+            contentRevision: documentStore.documentRevision,
             baseURL: documentStore.baseURL,
             theme: documentStore.previewTheme,
             scrollTarget: previewScrollTarget,
@@ -98,7 +101,15 @@ private struct WorkspaceView: View {
     }
 
     private func syncEditorToPreview(_ line: Int) {
-        guard documentStore.viewMode == .split, mutedScrollSource != .editor else {
+        guard mutedScrollSource != .editor else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            documentStore.updateActiveOutline(forSourceLine: line)
+        }
+
+        guard documentStore.viewMode == .split else {
             return
         }
 
@@ -111,7 +122,15 @@ private struct WorkspaceView: View {
     }
 
     private func syncPreviewToEditor(_ line: Int) {
-        guard documentStore.viewMode == .split, mutedScrollSource != .preview else {
+        guard mutedScrollSource != .preview else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            documentStore.updateActiveOutline(forSourceLine: line)
+        }
+
+        guard documentStore.viewMode == .split else {
             return
         }
 
@@ -281,27 +300,6 @@ private struct EditorInsertToolbar: View {
     }
 }
 
-private struct EditorLineNumberColumn: View {
-    let lineCount: Int
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .trailing, spacing: 6) {
-                ForEach(1...max(1, lineCount), id: \.self) { lineNumber in
-                    Text("\(lineNumber)")
-                        .font(.system(size: 11, weight: .regular, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, alignment: .trailing)
-                }
-            }
-            .padding(.top, 20)
-            .padding(.horizontal, 6)
-        }
-        .frame(width: 44)
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-}
-
 private struct EditorStatusBar: View {
     @EnvironmentObject private var documentStore: DocumentStore
 
@@ -334,51 +332,59 @@ private struct SidebarView: View {
     var body: some View {
         let strings = documentStore.strings
 
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(documentStore.displayName)
-                    .font(.system(size: 17, weight: .semibold))
-                    .lineLimit(2)
+        ZStack(alignment: .topLeading) {
+            MacSidebarBackground()
 
-                Text(documentStore.dirtyIndicator)
-                    .font(.system(size: 13))
-                    .foregroundStyle(documentStore.isDirty ? .orange : .secondary)
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: SidebarLayout.leadingPadding)
 
-                if documentStore.isDirty {
-                    Label(strings.unsavedChangesVisible, systemImage: "exclamationmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(documentStore.displayName)
+                            .font(.system(size: 17, weight: .semibold))
+                            .lineLimit(2)
+
+                        Text(documentStore.dirtyIndicator)
+                            .font(.system(size: 13))
+                            .foregroundStyle(documentStore.isDirty ? .orange : .secondary)
+
+                        if documentStore.isDirty {
+                            Label(strings.unsavedChangesVisible, systemImage: "exclamationmark.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.orange)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Picker(strings.sidebarContent, selection: Binding(
+                        get: { documentStore.sidebarPanel },
+                        set: { documentStore.setSidebarPanel($0) }
+                    )) {
+                        ForEach(SidebarPanel.allCases) { panel in
+                            Text(strings.sidebarPanelTitle(panel)).tag(panel)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.regular)
+
+                    Divider()
+
+                    Group {
+                        switch documentStore.sidebarPanel {
+                        case .files:
+                            WorkspaceFilesPanel()
+                        case .outline:
+                            OutlinePanel()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
+                .padding(.trailing, SidebarLayout.trailingPadding)
+                .padding(.vertical, 18)
             }
-
-            Picker(strings.sidebarContent, selection: Binding(
-                get: { documentStore.sidebarPanel },
-                set: { documentStore.setSidebarPanel($0) }
-            )) {
-                ForEach(SidebarPanel.allCases) { panel in
-                    Text(strings.sidebarPanelTitle(panel)).tag(panel)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.regular)
-
-            Divider()
-
-            Group {
-                switch documentStore.sidebarPanel {
-                case .files:
-                    WorkspaceFilesPanel()
-                case .outline:
-                    OutlinePanel()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 18)
-        .background(MacSidebarBackground())
     }
 }
 
@@ -441,11 +447,35 @@ struct SettingsView: View {
                 Section(strings.assets) {
                     Toggle(strings.copyToAssets, isOn: $documentStore.copyImagesToAssetFolder)
                 }
+
+                Section(strings.performance) {
+                    Toggle(strings.performanceDiagnostics, isOn: Binding(
+                        get: { documentStore.performanceDiagnosticsEnabled },
+                        set: { documentStore.setPerformanceDiagnosticsEnabled($0) }
+                    ))
+
+                    Text(strings.performanceDiagnosticsHelp)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack {
+                        Button(strings.copyPerformanceReport) {
+                            documentStore.copyPerformanceReport()
+                        }
+                        .disabled(!documentStore.performanceDiagnosticsEnabled)
+
+                        Button(strings.resetPerformanceRecords) {
+                            documentStore.resetPerformanceRecords()
+                        }
+                        .disabled(!documentStore.performanceDiagnosticsEnabled)
+                    }
+                }
             }
             .formStyle(.grouped)
         }
         .padding(24)
-        .frame(width: 420)
+        .frame(width: 460)
     }
 }
 
@@ -489,7 +519,7 @@ private struct WorkspaceFilesPanel: View {
                     systemImage: "tray"
                 )
             } else {
-                ScrollView {
+                SidebarScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         if isSearching {
                             ForEach(searchResults) { result in
@@ -798,13 +828,16 @@ private struct OutlinePanel: View {
                     systemImage: "list.bullet.indent"
                 )
             } else {
-                ScrollView {
+                SidebarScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(documentStore.outline) { item in
                             Button {
                                 documentStore.jumpToOutlineItem(item)
                             } label: {
-                                OutlineSourceRow(item: item)
+                                OutlineSourceRow(
+                                    item: item,
+                                    isActive: documentStore.activeOutlineItemID == item.id
+                                )
                             }
                             .buttonStyle(.plain)
                         }
@@ -815,6 +848,43 @@ private struct OutlinePanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct SidebarScrollView<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            content()
+                .padding(.trailing, SidebarLayout.scrollViewTrailingCompensation)
+                .background(SidebarScrollerConfigurator())
+        }
+        .padding(.trailing, -SidebarLayout.scrollViewTrailingCompensation)
+    }
+}
+
+private struct SidebarScrollerConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        NSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let scrollView = nsView.enclosingScrollView else {
+                return
+            }
+
+            scrollView.drawsBackground = false
+            scrollView.backgroundColor = .clear
+            scrollView.contentView.drawsBackground = false
+            scrollView.contentView.backgroundColor = .clear
+            scrollView.hasVerticalScroller = true
+            scrollView.autohidesScrollers = true
+            scrollView.scrollerStyle = .overlay
+            scrollView.scrollerInsets = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
+            scrollView.verticalScroller?.controlSize = .mini
+        }
     }
 }
 
@@ -875,25 +945,61 @@ private struct SidebarSourceRowBackground: View {
 
 private struct OutlineSourceRow: View {
     let item: OutlineItem
+    let isActive: Bool
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
             Text("H\(item.level)")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isActive ? Color.white.opacity(0.82) : .secondary)
                 .frame(width: 30, alignment: .leading)
 
             Text(item.title)
-                .font(.system(size: 15))
+                .font(.system(size: 15, weight: isActive ? .semibold : .regular))
                 .lineLimit(1)
-                .foregroundStyle(.primary)
+                .foregroundStyle(isActive ? Color.white : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, CGFloat(max(0, item.level - 1)) * 18)
         .padding(.horizontal, 8)
         .frame(height: 32)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(OutlineRowBackground(isActive: isActive, isHovered: isHovered))
+        .overlay(alignment: .leading) {
+            if isActive {
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(Color.accentColor)
+                    .frame(width: 3, height: 18)
+                    .padding(.leading, 1)
+            }
+        }
         .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(.easeOut(duration: 0.12), value: isActive)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+    }
+}
+
+private struct OutlineRowBackground: View {
+    let isActive: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(backgroundColor)
+    }
+
+    private var backgroundColor: Color {
+        if isActive {
+            return Color.accentColor.opacity(isHovered ? 0.92 : 0.82)
+        }
+        if isHovered {
+            return Color.primary.opacity(0.07)
+        }
+        return .clear
     }
 }
 
@@ -901,30 +1007,15 @@ private struct MacSidebarBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.material = .sidebar
-        view.blendingMode = .behindWindow
+        view.blendingMode = .withinWindow
         view.state = .active
         return view
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = .sidebar
-        nsView.blendingMode = .behindWindow
+        nsView.blendingMode = .withinWindow
         nsView.state = .active
-    }
-}
-
-private struct SidebarButton: View {
-    let title: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .lineLimit(1)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
     }
 }
 

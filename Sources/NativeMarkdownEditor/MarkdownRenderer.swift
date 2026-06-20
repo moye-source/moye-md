@@ -1,6 +1,8 @@
 import Foundation
 
 enum MarkdownRenderer {
+    private static let inlineSpecialCharacters = CharacterSet(charactersIn: #"&<>"'`![]()*_~=^:"#)
+
     static func renderDocument(
         _ markdown: String,
         theme: PreviewTheme = .system,
@@ -219,6 +221,15 @@ enum MarkdownRenderer {
             background: var(--soft);
             text-align: left;
           }
+          @supports (content-visibility: auto) {
+            body > :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table, figure, details, .toc, .math-block, .diagram) {
+              content-visibility: auto;
+              contain-intrinsic-size: auto 48px;
+            }
+            body > :where(table, figure, pre, .diagram) {
+              contain-intrinsic-size: auto 180px;
+            }
+          }
         </style>
         """
     }
@@ -257,13 +268,24 @@ enum MarkdownRenderer {
         """
     }
 
-    private static func sourceLineAttribute(_ lineIndex: Int) -> String {
-        #" data-source-line="\#(lineIndex + 1)""#
+    private static func sourceLineAttribute(_ lineIndex: Int, includeElementID: Bool = true) -> String {
+        let lineNumber = lineIndex + 1
+        let dataAttribute = #" data-source-line="\#(lineNumber)""#
+        guard includeElementID else {
+            return dataAttribute
+        }
+        return #"\#(dataAttribute) id="\#(sourceLineElementID(forLine: lineNumber))""#
+    }
+
+    private static func sourceLineElementID(forLine line: Int) -> String {
+        "moye-source-line-\(max(1, line))"
     }
 
     private static func renderBody(_ markdown: String, context: RenderContext) -> String {
         let lines = markdown.components(separatedBy: .newlines)
-        var html: [String] = []
+        var html = String()
+        let estimatedHTMLLength = markdown.utf16.count
+        html.reserveCapacity(estimatedHTMLLength + estimatedHTMLLength / 4)
         var paragraph: [String] = []
         var paragraphStartLineIndex: Int?
         var codeLines: [String] = []
@@ -272,23 +294,32 @@ enum MarkdownRenderer {
         var isInCodeFence = false
         var isInUnorderedList = false
         var isInOrderedList = false
+        var hasHTML = false
         var lineIndex = 0
+
+        func appendHTML(_ fragment: String) {
+            if hasHTML {
+                html.append("\n")
+            }
+            html.append(fragment)
+            hasHTML = true
+        }
 
         func closeParagraph() {
             guard !paragraph.isEmpty else { return }
             let attribute = sourceLineAttribute(paragraphStartLineIndex ?? 0)
-            html.append("<p\(attribute)>\(paragraph.map { renderInline($0, context: context) }.joined(separator: " "))</p>")
+            appendHTML("<p\(attribute)>\(paragraph.map { renderInline($0, context: context) }.joined(separator: " "))</p>")
             paragraph.removeAll()
             paragraphStartLineIndex = nil
         }
 
         func closeLists() {
             if isInUnorderedList {
-                html.append("</ul>")
+                appendHTML("</ul>")
                 isInUnorderedList = false
             }
             if isInOrderedList {
-                html.append("</ol>")
+                appendHTML("</ol>")
                 isInOrderedList = false
             }
         }
@@ -300,7 +331,7 @@ enum MarkdownRenderer {
             if lineIndex == 0, let frontMatter = parseFrontMatter(lines: lines) {
                 closeParagraph()
                 closeLists()
-                html.append(renderFrontMatter(frontMatter.content, sourceLine: lineIndex))
+                appendHTML(renderFrontMatter(frontMatter.content, sourceLine: lineIndex))
                 lineIndex = frontMatter.consumedLineCount
                 continue
             }
@@ -315,7 +346,7 @@ enum MarkdownRenderer {
                 closeLists()
 
                 if isInCodeFence {
-                    html.append(renderCodeFence(
+                    appendHTML(renderCodeFence(
                         language: codeFenceLanguage,
                         lines: codeLines,
                         sourceLine: codeFenceStartLineIndex ?? lineIndex
@@ -349,7 +380,7 @@ enum MarkdownRenderer {
             if let mathBlock = parseMathBlock(lines: lines, startIndex: lineIndex) {
                 closeParagraph()
                 closeLists()
-                html.append(renderMathBlock(mathBlock.content, sourceLine: lineIndex))
+                appendHTML(renderMathBlock(mathBlock.content, sourceLine: lineIndex))
                 lineIndex += mathBlock.consumedLineCount
                 continue
             }
@@ -357,7 +388,7 @@ enum MarkdownRenderer {
             if isHorizontalRule(trimmed) {
                 closeParagraph()
                 closeLists()
-                html.append("<hr\(sourceLineAttribute(lineIndex))>")
+                appendHTML("<hr\(sourceLineAttribute(lineIndex))>")
                 lineIndex += 1
                 continue
             }
@@ -365,7 +396,7 @@ enum MarkdownRenderer {
             if trimmed.lowercased() == "[toc]" {
                 closeParagraph()
                 closeLists()
-                html.append(renderTOC(context.headings, sourceLine: lineIndex))
+                appendHTML(renderTOC(context.headings, sourceLine: lineIndex))
                 lineIndex += 1
                 continue
             }
@@ -373,7 +404,7 @@ enum MarkdownRenderer {
             if let table = parseTable(lines: lines, startIndex: lineIndex, context: context, sourceLine: lineIndex) {
                 closeParagraph()
                 closeLists()
-                html.append(table.html)
+                appendHTML(table.html)
                 lineIndex += table.consumedLineCount
                 continue
             }
@@ -382,7 +413,7 @@ enum MarkdownRenderer {
                 closeParagraph()
                 closeLists()
                 let id = headingAnchorID(for: heading.text)
-                html.append("<h\(heading.level)\(sourceLineAttribute(lineIndex)) id=\"\(id)\">\(renderInline(heading.text, context: context))</h\(heading.level)>")
+                appendHTML("<h\(heading.level)\(sourceLineAttribute(lineIndex, includeElementID: false)) id=\"\(id)\">\(renderInline(heading.text, context: context))</h\(heading.level)>")
                 lineIndex += 1
                 continue
             }
@@ -391,7 +422,7 @@ enum MarkdownRenderer {
                 closeParagraph()
                 closeLists()
                 let quote = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-                html.append("<blockquote\(sourceLineAttribute(lineIndex))>\(renderInline(String(quote), context: context))</blockquote>")
+                appendHTML("<blockquote\(sourceLineAttribute(lineIndex))>\(renderInline(String(quote), context: context))</blockquote>")
                 lineIndex += 1
                 continue
             }
@@ -399,14 +430,14 @@ enum MarkdownRenderer {
             if let item = parseUnorderedListItem(trimmed) {
                 closeParagraph()
                 if isInOrderedList {
-                    html.append("</ol>")
+                    appendHTML("</ol>")
                     isInOrderedList = false
                 }
                 if !isInUnorderedList {
-                    html.append("<ul\(sourceLineAttribute(lineIndex))>")
+                    appendHTML("<ul\(sourceLineAttribute(lineIndex, includeElementID: false))>")
                     isInUnorderedList = true
                 }
-                html.append(renderListItem(item, context: context, sourceLine: lineIndex))
+                appendHTML(renderListItem(item, context: context, sourceLine: lineIndex))
                 lineIndex += 1
                 continue
             }
@@ -414,14 +445,14 @@ enum MarkdownRenderer {
             if let item = parseOrderedListItem(trimmed) {
                 closeParagraph()
                 if isInUnorderedList {
-                    html.append("</ul>")
+                    appendHTML("</ul>")
                     isInUnorderedList = false
                 }
                 if !isInOrderedList {
-                    html.append("<ol\(sourceLineAttribute(lineIndex))>")
+                    appendHTML("<ol\(sourceLineAttribute(lineIndex, includeElementID: false))>")
                     isInOrderedList = true
                 }
-                html.append(renderListItem(item, context: context, sourceLine: lineIndex))
+                appendHTML(renderListItem(item, context: context, sourceLine: lineIndex))
                 lineIndex += 1
                 continue
             }
@@ -438,14 +469,14 @@ enum MarkdownRenderer {
         closeLists()
 
         if isInCodeFence {
-            html.append(renderCodeFence(
+            appendHTML(renderCodeFence(
                 language: codeFenceLanguage,
                 lines: codeLines,
                 sourceLine: codeFenceStartLineIndex ?? lineIndex
             ))
         }
 
-        return html.joined(separator: "\n")
+        return html
     }
 
     fileprivate static func parseHeading(_ line: String) -> (level: Int, text: String)? {
@@ -748,7 +779,19 @@ enum MarkdownRenderer {
             .replacing(pattern: #"&lt;(\/?(?:u|br|kbd|sub|sup|mark|small|span|video|iframe)\b[^&]*)&gt;"#, with: #"<$1>"#)
     }
 
+    static func canRenderInlineAsPlainText(_ text: String) -> Bool {
+        guard !text.isEmpty else {
+            return true
+        }
+        return text.rangeOfCharacter(from: inlineSpecialCharacters) == nil &&
+            !text.contains("www.")
+    }
+
     private static func renderInline(_ text: String, context: RenderContext?) -> String {
+        if canRenderInlineAsPlainText(text) {
+            return text
+        }
+
         var protectedHTML: [String] = []
 
         func token(for index: Int) -> String {
@@ -971,38 +1014,45 @@ private struct RenderContext {
     private let skippedLineIndexes: Set<Int>
 
     init(markdown: String) {
-        let lines = markdown.components(separatedBy: .newlines)
+        let nsMarkdown = markdown as NSString
+        let fullRange = NSRange(location: 0, length: nsMarkdown.length)
         var headings: [Heading] = []
         var footnotes: [String: String] = [:]
         var footnoteOrder: [String] = []
         var referenceLinks: [String: ReferenceLink] = [:]
         var skippedLineIndexes: Set<Int> = []
         var isInCodeFence = false
+        var lineIndex = 0
 
-        for (index, line) in lines.enumerated() {
+        nsMarkdown.enumerateSubstrings(in: fullRange, options: [.byLines]) { line, _, _, _ in
+            guard let line else {
+                lineIndex += 1
+                return
+            }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            defer { lineIndex += 1 }
 
             if trimmed.hasPrefix("```") {
                 isInCodeFence.toggle()
-                continue
+                return
             }
 
             guard !isInCodeFence else {
-                continue
+                return
             }
 
             if let footnote = trimmed.firstMatchGroups(pattern: #"^\[\^([^\]]+)\]:\s*(.+)$"#), footnote.count == 2 {
                 footnotes[footnote[0]] = footnote[1]
                 footnoteOrder.append(footnote[0])
-                skippedLineIndexes.insert(index)
-                continue
+                skippedLineIndexes.insert(lineIndex)
+                return
             }
 
             if let reference = trimmed.firstMatchGroups(pattern: #"^\[([^\]]+)\]:\s+(\S+)(?:\s+&quot;([^&]*)&quot;|\s+"([^"]*)")?\s*$"#) {
                 let title = reference.count > 2 ? reference.dropFirst(2).first(where: { !$0.isEmpty }) : nil
                 referenceLinks[reference[0]] = ReferenceLink(url: reference[1], title: title)
-                skippedLineIndexes.insert(index)
-                continue
+                skippedLineIndexes.insert(lineIndex)
+                return
             }
 
             if let heading = MarkdownRenderer.parseHeading(trimmed) {
@@ -1035,7 +1085,7 @@ private struct RenderContext {
 
 private extension String {
     func replacing(pattern: String, with template: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = RegexCache.expression(pattern: pattern) else {
             return self
         }
 
@@ -1049,7 +1099,7 @@ private extension String {
     }
 
     func firstMatch(pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = RegexCache.expression(pattern: pattern) else {
             return nil
         }
 
@@ -1066,7 +1116,7 @@ private extension String {
     }
 
     func firstMatchGroups(pattern: String) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = RegexCache.expression(pattern: pattern) else {
             return nil
         }
 
@@ -1089,7 +1139,7 @@ private extension String {
     }
 
     func replacingMatches(pattern: String, transform: ([String]) -> String?) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = RegexCache.expression(pattern: pattern) else {
             return self
         }
 

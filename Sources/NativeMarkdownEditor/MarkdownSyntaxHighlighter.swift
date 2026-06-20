@@ -1,9 +1,19 @@
 import AppKit
 
 enum MarkdownSyntaxHighlighter {
+    static let fullHighlightCharacterLimit = 250_000
+
     private static let baseFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
     private static let strongFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .semibold)
     private static let codeFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+
+    static func usesFullHighlighting(characterCount: Int) -> Bool {
+        characterCount <= fullHighlightCharacterLimit
+    }
+
+    static func paragraphStyleForEditor() -> NSParagraphStyle {
+        paragraphStyle()
+    }
 
     static func apply(to textView: NSTextView, focusRange: NSRange? = nil) {
         guard !textView.hasMarkedText() else {
@@ -17,6 +27,13 @@ enum MarkdownSyntaxHighlighter {
         let nsString = storage.string as NSString
         let fullRange = NSRange(location: 0, length: nsString.length)
         guard fullRange.length > 0 else {
+            textView.typingAttributes = baseAttributes()
+            return
+        }
+
+        guard usesFullHighlighting(characterCount: nsString.length) else {
+            textView.font = baseFont
+            textView.textColor = .textColor
             textView.typingAttributes = baseAttributes()
             return
         }
@@ -276,7 +293,7 @@ enum MarkdownSyntaxHighlighter {
         skipping skippedRanges: [NSRange],
         body: (NSTextStorage, NSTextCheckingResult) -> Void
     ) {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else {
+        guard let regex = RegexCache.expression(pattern: pattern, options: [.anchorsMatchLines]) else {
             return
         }
 
@@ -335,7 +352,7 @@ enum MarkdownSyntaxHighlighter {
 
 private extension String {
     func firstMatchRange(pattern: String) -> NSRange? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = RegexCache.expression(pattern: pattern) else {
             return nil
         }
 

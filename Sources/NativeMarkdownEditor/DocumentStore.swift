@@ -6,10 +6,22 @@ import UniformTypeIdentifiers
 final class DocumentStore: ObservableObject {
     @Published var markdown: String {
         willSet {
-            registerUndoSnapshot(markdown, replacingWith: newValue)
+            if let pendingTextBufferEdit {
+                registerUndoEdit(pendingTextBufferEdit)
+            } else {
+                registerUndoSnapshot(markdown, replacingWith: newValue)
+            }
         }
         didSet {
-            outline = Self.buildOutline(from: markdown)
+            if !isPublishingTextBufferSnapshot {
+                textBuffer.reset(markdown)
+            }
+            markMarkdownEdited()
+            if isPublishingTextBufferSnapshot, let pendingTextBufferEdit {
+                refreshDerivedData(snapshot: markdown, edit: pendingTextBufferEdit.markdownTextEdit)
+            } else {
+                scheduleDerivedDataRefresh(for: markdown, replacing: oldValue)
+            }
         }
     }
     @Published var selectedRange: NSRange
@@ -22,29 +34,93 @@ final class DocumentStore: ObservableObject {
     @Published var lineNumbersEnabled: Bool
     @Published var autoPairEnabled: Bool
     @Published var copyImagesToAssetFolder: Bool
+    @Published var performanceDiagnosticsEnabled: Bool
     @Published var language: AppLanguage
-    @Published var workspaceURL: URL?
-    @Published var fileSearchQuery: String
-    @Published var expandedWorkspaceDirectories: Set<String>
+    @Published var workspaceURL: URL? {
+        didSet {
+            guard workspaceURL?.standardizedFileURL.path != oldValue?.standardizedFileURL.path else {
+                return
+            }
+            reloadWorkspaceFiles()
+        }
+    }
+    @Published var fileSearchQuery: String {
+        didSet {
+            guard fileSearchQuery != oldValue else {
+                return
+            }
+            rebuildWorkspaceSearchCaches()
+        }
+    }
+    @Published var expandedWorkspaceDirectories: Set<String> {
+        didSet {
+            rebuildVisibleWorkspaceTreeRowsCache()
+        }
+    }
     @Published var selectedWorkspaceFileID: String?
     @Published var isQuickOpenPresented: Bool
-    @Published var quickOpenQuery: String
+    @Published var quickOpenQuery: String {
+        didSet {
+            guard quickOpenQuery != oldValue else {
+                return
+            }
+            rebuildWorkspaceSearchCaches()
+        }
+    }
     @Published private(set) var fileURL: URL?
     @Published private(set) var statusMessage: String
+    @Published private(set) var blockIndex: MarkdownBlockIndex
     @Published private(set) var outline: [OutlineItem]
+    @Published private(set) var activeOutlineItemID: OutlineItem.ID?
+    @Published private(set) var statistics: DocumentStatistics
     @Published private(set) var editorNavigationTarget: SourceLineScrollTarget?
+    @Published private(set) var documentRevision: Int
+    @Published private(set) var isDirty: Bool
+    @Published private(set) var workspaceSearchResults: [WorkspaceSearchResult]
+    @Published private(set) var quickOpenResults: [WorkspaceSearchResult]
+    @Published private(set) var workspaceFiles: [WorkspaceFile] {
+        didSet {
+            rebuildWorkspaceTreeCache()
+            rebuildWorkspaceSearchCaches()
+        }
+    }
+
+    private static let immediateDerivedDataCharacterLimit = 120_000
+    private static let exactDirtyCompareCharacterLimit = 120_000
+    private static let undoCoalescingInterval: TimeInterval = 3.0
 
     private var lastSavedSnapshot: String
+    private var savedDocumentRevision: Int
     private var activePDFExporter: MarkdownPDFExporter?
     private var activeImageExporter: MarkdownImageExporter?
-    private var undoStack: [String]
-    private var redoStack: [String]
+    private var undoStack: [DocumentEditDelta]
+    private var redoStack: [DocumentEditDelta]
     private var isApplyingHistory: Bool
+    private var textBuffer: PieceTableTextBuffer
+    private var isPublishingTextBufferSnapshot: Bool
+    private var pendingTextBufferEdit: TextBufferEdit?
+    private var lastUndoRegistrationDate: Date?
     private var navigationRevision: Int
+    private var activeOutlineSourceLine: Int
+    private var blockIndexRevision: Int
+    private var derivedDataRefreshRequestID: Int
+    private var derivedDataRefreshWork: DispatchWorkItem?
+    private var pendingDerivedDataBaseMarkdown: String?
+    private var forceImmediateDerivedDataRefresh: Bool
+    private var undoMemoryCost: Int
+    private var redoMemoryCost: Int
+    private var workspaceTextCache: [String: WorkspaceTextCacheEntry]
+    private var workspaceFileByIDCache: [String: WorkspaceFile]
+    private var workspaceTreeCache: [WorkspaceTreeNode]
+    private var visibleWorkspaceTreeRowsCache: [WorkspaceTreeRow]
 
-    init() {
+    private static let undoMemoryBudget = 4_000_000
+    private static let workspaceContentSearchFileSizeLimit = 2_000_000
+
+    init(initialDocumentURL: URL? = nil) {
         let initialLanguage = AppLanguage.chinese
         let sample = Self.defaultDocument(for: initialLanguage)
+        let initialBlockIndex = MarkdownBlockIndex(markdown: sample)
         markdown = sample
         selectedRange = NSRange(location: (sample as NSString).length, length: 0)
         viewMode = .split
@@ -56,21 +132,51 @@ final class DocumentStore: ObservableObject {
         lineNumbersEnabled = false
         autoPairEnabled = true
         copyImagesToAssetFolder = true
+        performanceDiagnosticsEnabled = true
         language = initialLanguage
         workspaceURL = nil
+        workspaceFiles = []
         fileSearchQuery = ""
         expandedWorkspaceDirectories = []
         selectedWorkspaceFileID = nil
         isQuickOpenPresented = false
         quickOpenQuery = ""
-        outline = Self.buildOutline(from: sample)
+        blockIndex = initialBlockIndex
+        outline = initialBlockIndex.outline
+        statistics = initialBlockIndex.statistics
         editorNavigationTarget = nil
+        documentRevision = 0
+        isDirty = false
+        workspaceSearchResults = []
+        quickOpenResults = []
         lastSavedSnapshot = sample
+        savedDocumentRevision = 0
         statusMessage = LocalizedStrings(language: initialLanguage).ready
+        activeOutlineItemID = nil
         undoStack = []
         redoStack = []
         isApplyingHistory = false
+        textBuffer = PieceTableTextBuffer(sample)
+        isPublishingTextBufferSnapshot = false
+        pendingTextBufferEdit = nil
+        lastUndoRegistrationDate = nil
         navigationRevision = 0
+        activeOutlineSourceLine = 1
+        blockIndexRevision = initialBlockIndex.revision
+        derivedDataRefreshRequestID = 0
+        pendingDerivedDataBaseMarkdown = nil
+        forceImmediateDerivedDataRefresh = false
+        undoMemoryCost = 0
+        redoMemoryCost = 0
+        workspaceTextCache = [:]
+        workspaceFileByIDCache = [:]
+        workspaceTreeCache = []
+        visibleWorkspaceTreeRowsCache = []
+        PerformanceDiagnostics.shared.setEnabled(true)
+
+        if let initialDocumentURL {
+            _ = openDocument(at: initialDocumentURL, requiresConfirmation: false)
+        }
     }
 
     var canUndo: Bool {
@@ -93,63 +199,101 @@ final class DocumentStore: ObservableObject {
         isDirty ? strings.unsavedChangesVisible : strings.saved
     }
 
-    var isDirty: Bool {
-        markdown != lastSavedSnapshot
-    }
-
     var wordCount: Int {
-        markdown
-            .split { $0.isWhitespace || $0.isNewline }
-            .count
+        statistics.wordCount
     }
 
     var characterCount: Int {
-        markdown.count
+        statistics.characterCount
     }
 
     var lineCount: Int {
-        markdown.split(separator: "\n", omittingEmptySubsequences: false).count
+        statistics.lineCount
     }
 
     var readingMinutes: Int {
-        max(1, Int(ceil(Double(wordCount) / 220.0)))
+        statistics.readingMinutes
     }
 
-    private static func buildOutline(from markdown: String) -> [OutlineItem] {
-        let nsMarkdown = markdown as NSString
-        let fullRange = NSRange(location: 0, length: nsMarkdown.length)
-        var items: [OutlineItem] = []
-        var lineNumber = 1
+    private func scheduleDerivedDataRefresh(for markdown: String, replacing oldMarkdown: String? = nil) {
+        derivedDataRefreshWork?.cancel()
+        derivedDataRefreshWork = nil
+        derivedDataRefreshRequestID += 1
+        let requestID = derivedDataRefreshRequestID
 
-        nsMarkdown.enumerateSubstrings(in: fullRange, options: [.byLines, .substringNotRequired]) { _, substringRange, _, _ in
-            let currentLine = lineNumber
-            lineNumber += 1
-            let line = nsMarkdown.substring(with: substringRange).trimmingCharacters(in: .whitespaces)
-            let markerCount = line.prefix { $0 == "#" }.count
-            guard (1...6).contains(markerCount) else {
-                return
-            }
+        let shouldRefreshImmediately = forceImmediateDerivedDataRefresh ||
+            markdown.utf16.count <= Self.immediateDerivedDataCharacterLimit
 
-            let index = line.index(line.startIndex, offsetBy: markerCount)
-            guard index < line.endIndex, line[index] == " " else {
-                return
-            }
-
-            let title = line[index...].trimmingCharacters(in: .whitespaces)
-            guard !title.isEmpty else {
-                return
-            }
-
-            items.append(OutlineItem(
-                id: "\(substringRange.location)-\(markerCount)-\(title)",
-                level: markerCount,
-                title: title,
-                location: substringRange.location,
-                line: currentLine
-            ))
+        if shouldRefreshImmediately {
+            pendingDerivedDataBaseMarkdown = nil
+            let snapshot = markdown
+            let edit = oldMarkdown.flatMap { MarkdownTextEdit.diff(old: $0, new: markdown) }
+            refreshDerivedData(snapshot: snapshot, edit: edit)
+            return
         }
 
-        return items
+        if pendingDerivedDataBaseMarkdown == nil {
+            pendingDerivedDataBaseMarkdown = oldMarkdown
+        }
+        let baseMarkdown = pendingDerivedDataBaseMarkdown
+        let refresh = DispatchWorkItem { [weak self] in
+            guard let self, self.derivedDataRefreshRequestID == requestID else {
+                return
+            }
+
+            let snapshot = self.markdown
+            let edit = baseMarkdown.flatMap { MarkdownTextEdit.diff(old: $0, new: snapshot) }
+            self.refreshDerivedData(snapshot: snapshot, edit: edit)
+            self.pendingDerivedDataBaseMarkdown = nil
+            self.derivedDataRefreshWork = nil
+        }
+
+        derivedDataRefreshWork = refresh
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: refresh)
+    }
+
+    private func refreshDerivedData(snapshot: String, edit: MarkdownTextEdit?) {
+        blockIndexRevision += 1
+        let nextBlockIndex = PerformanceDiagnostics.shared.measure(
+            "derived-data.refresh",
+            metadata: [
+                "characters": "\(snapshot.utf16.count)",
+                "edit": edit == nil ? "full" : "incremental",
+            ]
+        ) {
+            blockIndex.updating(
+                markdown: snapshot,
+                edit: edit,
+                revision: blockIndexRevision
+            )
+        }
+        blockIndex = nextBlockIndex
+        statistics = nextBlockIndex.statistics
+        outline = nextBlockIndex.outline
+        updateActiveOutline(forSourceLine: activeOutlineSourceLine)
+    }
+
+    private func setMarkdown(_ newMarkdown: String, refreshDerivedDataImmediately: Bool) {
+        forceImmediateDerivedDataRefresh = refreshDerivedDataImmediately
+        markdown = newMarkdown
+        forceImmediateDerivedDataRefresh = false
+    }
+
+    private func markMarkdownEdited() {
+        documentRevision += 1
+        let canCompareExactly = markdown.utf16.count <= Self.exactDirtyCompareCharacterLimit &&
+            lastSavedSnapshot.utf16.count <= Self.exactDirtyCompareCharacterLimit
+        if canCompareExactly {
+            isDirty = markdown != lastSavedSnapshot
+        } else {
+            isDirty = documentRevision != savedDocumentRevision
+        }
+    }
+
+    private func markDocumentClean(snapshot: String) {
+        lastSavedSnapshot = snapshot
+        savedDocumentRevision = documentRevision
+        isDirty = false
     }
 
     var baseURL: URL? {
@@ -160,42 +304,32 @@ final class DocumentStore: ObservableObject {
         workspaceURL?.lastPathComponent ?? strings.noFolder
     }
 
-    var workspaceFiles: [WorkspaceFile] {
+    private func reloadWorkspaceFiles() {
         guard let workspaceURL else {
-            return []
+            workspaceTextCache = [:]
+            workspaceFiles = []
+            return
         }
-
-        guard let enumerator = FileManager.default.enumerator(
-            at: workspaceURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
-            return []
-        }
-
-        var files: [WorkspaceFile] = []
-        for case let url as URL in enumerator {
-            guard let resourceValues = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey]) else {
-                continue
-            }
-            let isDirectory = resourceValues.isDirectory == true
-            let isRegularFile = resourceValues.isRegularFile == true
-            guard isDirectory || isRegularFile else { continue }
-
-            let relativePath = url.relativePath(from: workspaceURL) ?? url.lastPathComponent
-            files.append(WorkspaceFile(
-                id: url.path,
-                url: url,
-                relativePath: relativePath,
-                isDirectory: isDirectory,
-                isTextLike: !isDirectory && Self.isTextLikeURL(url)
-            ))
-        }
-
-        return files.sorted(by: Self.sortWorkspaceFiles)
+        let scannedFiles = Self.scanWorkspaceFiles(in: workspaceURL)
+        let validFileIDs = Set(scannedFiles.map(\.id))
+        expandedWorkspaceDirectories = expandedWorkspaceDirectories.intersection(validFileIDs)
+        workspaceTextCache = workspaceTextCache.filter { validFileIDs.contains($0.key) }
+        workspaceFiles = scannedFiles
     }
 
     var workspaceTree: [WorkspaceTreeNode] {
+        workspaceTreeCache
+    }
+
+    var visibleWorkspaceTreeRows: [WorkspaceTreeRow] {
+        visibleWorkspaceTreeRowsCache
+    }
+
+    private func rebuildWorkspaceTreeCache() {
+        workspaceFileByIDCache = Dictionary(
+            uniqueKeysWithValues: workspaceFiles.map { ($0.id, $0) }
+        )
+
         let grouped = Dictionary(grouping: workspaceFiles) { file in
             Self.parentPath(for: file.relativePath)
         }
@@ -211,10 +345,11 @@ final class DocumentStore: ObservableObject {
                 }
         }
 
-        return makeNodes(parentPath: "")
+        workspaceTreeCache = makeNodes(parentPath: "")
+        rebuildVisibleWorkspaceTreeRowsCache()
     }
 
-    var visibleWorkspaceTreeRows: [WorkspaceTreeRow] {
+    private func rebuildVisibleWorkspaceTreeRowsCache() {
         var rows: [WorkspaceTreeRow] = []
 
         func append(nodes: [WorkspaceTreeNode], depth: Int) {
@@ -226,24 +361,17 @@ final class DocumentStore: ObservableObject {
             }
         }
 
-        append(nodes: workspaceTree, depth: 0)
-        return rows
+        append(nodes: workspaceTreeCache, depth: 0)
+        visibleWorkspaceTreeRowsCache = rows
     }
 
-    var filteredWorkspaceFiles: [WorkspaceFile] {
-        workspaceSearchResults.map(\.file)
-    }
-
-    var workspaceSearchResults: [WorkspaceSearchResult] {
-        workspaceSearchResults(
+    private func rebuildWorkspaceSearchCaches() {
+        workspaceSearchResults = makeWorkspaceSearchResults(
             matching: fileSearchQuery,
             includeDirectories: true,
             includeUnsupportedFiles: true
         )
-    }
-
-    var quickOpenResults: [WorkspaceSearchResult] {
-        workspaceSearchResults(
+        quickOpenResults = makeWorkspaceSearchResults(
             matching: quickOpenQuery,
             includeDirectories: false,
             includeUnsupportedFiles: false
@@ -254,7 +382,7 @@ final class DocumentStore: ObservableObject {
         guard let selectedWorkspaceFileID else {
             return nil
         }
-        return workspaceFiles.first { $0.id == selectedWorkspaceFileID }
+        return workspaceFileByIDCache[selectedWorkspaceFileID]
     }
 
     func newDocument() {
@@ -264,7 +392,8 @@ final class DocumentStore: ObservableObject {
         markdown = Self.defaultDocument(for: language)
         fileURL = nil
         selectedRange = NSRange(location: (markdown as NSString).length, length: 0)
-        lastSavedSnapshot = markdown
+        markDocumentClean(snapshot: markdown)
+        clearEditingHistory()
         statusMessage = strings.newDocument
     }
 
@@ -292,12 +421,34 @@ final class DocumentStore: ObservableObject {
             return
         }
 
+        openDocument(at: selectedURL, requiresConfirmation: false)
+    }
+
+    @discardableResult
+    func openDocument(at url: URL, requiresConfirmation: Bool = true) -> Bool {
+        if requiresConfirmation, !confirmDiscardUnsavedChangesIfNeeded() {
+            return false
+        }
+
         do {
-            let contents = try String(contentsOf: selectedURL, encoding: .utf8)
-            load(contents: contents, from: selectedURL)
-            workspaceURL = selectedURL.deletingLastPathComponent()
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey])
+            if values.isDirectory == true {
+                workspaceURL = url
+                fileSearchQuery = ""
+                expandedWorkspaceDirectories.removeAll()
+                selectedWorkspaceFileID = nil
+                quickOpenQuery = ""
+                statusMessage = strings.openedFolder(url.lastPathComponent)
+                return true
+            }
+
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            load(contents: contents, from: url)
+            workspaceURL = url.deletingLastPathComponent()
+            return true
         } catch {
             statusMessage = "Open failed: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -426,6 +577,7 @@ final class DocumentStore: ObservableObject {
 
         do {
             try "".write(to: destinationURL, atomically: true, encoding: .utf8)
+            reloadWorkspaceFiles()
             expandWorkspaceDirectory(for: directoryURL)
             if let file = workspaceFile(for: destinationURL) {
                 selectedWorkspaceFileID = file.id
@@ -470,6 +622,7 @@ final class DocumentStore: ObservableObject {
 
         do {
             try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: false)
+            reloadWorkspaceFiles()
             expandWorkspaceDirectory(for: directoryURL)
             if let file = workspaceFile(for: destinationURL) {
                 selectedWorkspaceFileID = file.id
@@ -526,6 +679,7 @@ final class DocumentStore: ObservableObject {
         do {
             try FileManager.default.moveItem(at: workspaceFile.url, to: destinationURL)
             expandedWorkspaceDirectories.remove(workspaceFile.id)
+            reloadWorkspaceFiles()
             if workspaceFile.isDirectory, let renamedFile = self.workspaceFile(for: destinationURL) {
                 expandedWorkspaceDirectories.insert(renamedFile.id)
             }
@@ -588,12 +742,15 @@ final class DocumentStore: ObservableObject {
             var resultingURL: NSURL?
             try FileManager.default.trashItem(at: workspaceFile.url, resultingItemURL: &resultingURL)
             expandedWorkspaceDirectories.remove(workspaceFile.id)
+            reloadWorkspaceFiles()
             if selectedWorkspaceFileID == workspaceFile.id {
                 selectedWorkspaceFileID = nil
             }
             if wasOpenFile {
                 fileURL = nil
                 lastSavedSnapshot = ""
+                savedDocumentRevision = documentRevision
+                isDirty = !markdown.isEmpty
             }
             statusMessage = strings.movedItemToTrash(workspaceFile.displayName)
             return true
@@ -654,7 +811,7 @@ final class DocumentStore: ObservableObject {
             markdown = contents
             fileURL = nil
             selectedRange = NSRange(location: 0, length: 0)
-            lastSavedSnapshot = contents
+            markDocumentClean(snapshot: contents)
             workspaceURL = selectedURL.deletingLastPathComponent()
             statusMessage = "Imported \(selectedURL.lastPathComponent) with Pandoc"
             try? FileManager.default.removeItem(at: temporaryURL)
@@ -673,20 +830,36 @@ final class DocumentStore: ObservableObject {
     }
 
     func undoEditing() {
-        guard let previous = undoStack.popLast() else {
+        guard let edit = undoStack.last else {
             return
         }
-        redoStack.append(markdown)
-        applyHistorySnapshot(previous)
+        guard applyHistoryEdit(edit, direction: .undo) else {
+            statusMessage = strings.undo
+            return
+        }
+        undoStack.removeLast()
+        undoMemoryCost -= edit.memoryCost
+        redoStack.append(edit)
+        redoMemoryCost += edit.memoryCost
+        lastUndoRegistrationDate = nil
+        trimRedoStackIfNeeded()
         statusMessage = strings.undo
     }
 
     func redoEditing() {
-        guard let next = redoStack.popLast() else {
+        guard let edit = redoStack.last else {
             return
         }
-        undoStack.append(markdown)
-        applyHistorySnapshot(next)
+        guard applyHistoryEdit(edit, direction: .redo) else {
+            statusMessage = strings.redo
+            return
+        }
+        redoStack.removeLast()
+        redoMemoryCost -= edit.memoryCost
+        undoStack.append(edit)
+        undoMemoryCost += edit.memoryCost
+        lastUndoRegistrationDate = nil
+        trimUndoStackIfNeeded()
         statusMessage = strings.redo
     }
 
@@ -722,6 +895,24 @@ final class DocumentStore: ObservableObject {
         sendFindAction(.previousMatch)
     }
 
+    func applyEditorTextEdit(
+        _ edit: SourceLineIndexEdit,
+        selectedRangeAfter: NSRange,
+        completeTextFallback: () -> String
+    ) {
+        guard let textBufferEdit = textBuffer.replaceCharacters(in: edit.range, with: edit.replacement) else {
+            let fallback = completeTextFallback()
+            markdown = fallback
+            selectedRange = selectedRangeAfter.clamped(toLength: (fallback as NSString).length) ??
+                NSRange(location: (fallback as NSString).length, length: 0)
+            return
+        }
+
+        publishTextBufferSnapshot(using: textBufferEdit)
+        selectedRange = selectedRangeAfter.clamped(toLength: textBuffer.length) ??
+            NSRange(location: textBuffer.length, length: 0)
+    }
+
     func saveDocumentAs() {
         let panel = NSSavePanel()
         panel.title = strings.saveMarkdownFileTitle
@@ -739,7 +930,7 @@ final class DocumentStore: ObservableObject {
         do {
             try markdown.write(to: url, atomically: true, encoding: .utf8)
             fileURL = url
-            lastSavedSnapshot = markdown
+            markDocumentClean(snapshot: markdown)
             statusMessage = strings.savedFile(url.lastPathComponent)
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
@@ -747,12 +938,19 @@ final class DocumentStore: ObservableObject {
     }
 
     private func load(contents: String, from url: URL) {
-        markdown = contents
+        PerformanceDiagnostics.shared.measure(
+            "document.load",
+            metadata: [
+                "characters": "\((contents as NSString).length)",
+                "file_extension": url.pathExtension.isEmpty ? "none" : url.pathExtension,
+            ]
+        ) {
+            setMarkdown(contents, refreshDerivedDataImmediately: true)
+        }
         fileURL = url
         selectedRange = NSRange(location: 0, length: 0)
-        lastSavedSnapshot = contents
-        undoStack.removeAll()
-        redoStack.removeAll()
+        markDocumentClean(snapshot: contents)
+        clearEditingHistory()
         statusMessage = strings.openedFile(url.lastPathComponent)
     }
 
@@ -1123,8 +1321,41 @@ final class DocumentStore: ObservableObject {
             : "Images will keep original paths"
     }
 
+    func setPerformanceDiagnosticsEnabled(_ enabled: Bool) {
+        performanceDiagnosticsEnabled = enabled
+        PerformanceDiagnostics.shared.setEnabled(enabled)
+        statusMessage = enabled ? strings.enabledPerformanceDiagnostics : strings.disabledPerformanceDiagnostics
+    }
+
+    func copyPerformanceReport() {
+        let report = performanceReport()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        statusMessage = strings.copiedPerformanceReport
+    }
+
+    func resetPerformanceRecords() {
+        PerformanceDiagnostics.shared.reset()
+        statusMessage = strings.resetPerformanceRecordsDone
+    }
+
+    func performanceReport() -> String {
+        PerformanceDiagnostics.shared.snapshot(
+            documentName: displayName,
+            characterCount: characterCount,
+            lineCount: lineCount,
+            blockCount: blockIndex.blocks.count,
+            outlineCount: outline.count,
+            viewMode: viewMode,
+            previewTheme: previewTheme
+        )
+        .lines
+        .joined(separator: "\n")
+    }
+
     func jumpToOutlineItem(_ item: OutlineItem) {
         selectedRange = NSRange(location: item.location, length: 0)
+        activeOutlineItemID = item.id
         if viewMode == .preview {
             viewMode = .split
         }
@@ -1136,6 +1367,40 @@ final class DocumentStore: ObservableObject {
             anchorID: MarkdownRenderer.headingAnchorID(for: item.title)
         )
         statusMessage = strings.jumpTo(item.title)
+    }
+
+    func updateActiveOutline(forSourceLine line: Int) {
+        activeOutlineSourceLine = max(1, line)
+        let nextActiveOutlineItemID = outlineItem(containingSourceLine: activeOutlineSourceLine)?.id
+        guard activeOutlineItemID != nextActiveOutlineItemID else {
+            return
+        }
+        activeOutlineItemID = nextActiveOutlineItemID
+    }
+
+    private func outlineItem(containingSourceLine line: Int) -> OutlineItem? {
+        guard !outline.isEmpty else {
+            return nil
+        }
+
+        var low = 0
+        var high = outline.count - 1
+        var matchedIndex: Int?
+
+        while low <= high {
+            let mid = (low + high) / 2
+            if outline[mid].line <= line {
+                matchedIndex = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        guard let matchedIndex else {
+            return nil
+        }
+        return outline[matchedIndex]
     }
 
     func showHelp() {
@@ -1261,7 +1526,7 @@ final class DocumentStore: ObservableObject {
             location: nsMarkdown.length,
             length: 0
         )
-        markdown = nsMarkdown.replacingCharacters(in: safeRange, with: snippet)
+        replaceMarkdownCharacters(in: safeRange, with: snippet)
 
         let insertedLength = (snippet as NSString).length
         selectedRange = NSRange(location: safeRange.location + insertedLength, length: 0)
@@ -1278,25 +1543,181 @@ final class DocumentStore: ObservableObject {
         )
     }
 
-    private func applyHistorySnapshot(_ snapshot: String) {
+    private func applyHistorySnapshot(_ snapshot: String, selection: NSRange?) {
         isApplyingHistory = true
-        markdown = snapshot
+        setMarkdown(snapshot, refreshDerivedDataImmediately: true)
         isApplyingHistory = false
-        selectedRange = selectedRange.clamped(toLength: (markdown as NSString).length)
+        selectedRange = selection?.clamped(toLength: (markdown as NSString).length)
+            ?? selectedRange.clamped(toLength: (markdown as NSString).length)
             ?? NSRange(location: (markdown as NSString).length, length: 0)
+        reconcileDirtyStateAfterHistoryChange()
+    }
+
+    private enum HistoryEditDirection {
+        case undo
+        case redo
+    }
+
+    private func applyHistoryEdit(_ edit: DocumentEditDelta, direction: HistoryEditDirection) -> Bool {
+        let range: NSRange
+        let expectedFragment: String
+        let replacement: String
+        let selection: NSRange
+
+        switch direction {
+        case .undo:
+            range = edit.newRange
+            expectedFragment = edit.newFragment
+            replacement = edit.oldFragment
+            selection = edit.selectionBefore
+        case .redo:
+            range = edit.oldRange
+            expectedFragment = edit.oldFragment
+            replacement = edit.newFragment
+            selection = edit.selectionAfter
+        }
+
+        guard textBuffer.substring(with: range) == expectedFragment else {
+            return applyHistoryEditUsingSnapshotFallback(edit, direction: direction)
+        }
+
+        isApplyingHistory = true
+        guard let textBufferEdit = textBuffer.replaceCharacters(in: range, with: replacement) else {
+            isApplyingHistory = false
+            return applyHistoryEditUsingSnapshotFallback(edit, direction: direction)
+        }
+        publishTextBufferSnapshot(using: textBufferEdit)
+        isApplyingHistory = false
+        selectedRange = selection.clamped(toLength: textBuffer.length) ??
+            NSRange(location: textBuffer.length, length: 0)
+        reconcileDirtyStateAfterHistoryChange()
+        return true
+    }
+
+    private func applyHistoryEditUsingSnapshotFallback(
+        _ edit: DocumentEditDelta,
+        direction: HistoryEditDirection
+    ) -> Bool {
+        switch direction {
+        case .undo:
+            guard let previous = edit.reverting(markdown) else {
+                return false
+            }
+            applyHistorySnapshot(previous, selection: edit.selectionBefore)
+            return true
+        case .redo:
+            guard let next = edit.reapplying(markdown) else {
+                return false
+            }
+            applyHistorySnapshot(next, selection: edit.selectionAfter)
+            return true
+        }
+    }
+
+    private func reconcileDirtyStateAfterHistoryChange() {
+        guard markdown.utf16.count == lastSavedSnapshot.utf16.count else {
+            return
+        }
+
+        if markdown == lastSavedSnapshot {
+            savedDocumentRevision = documentRevision
+            isDirty = false
+        }
+    }
+
+    private func replaceMarkdownCharacters(in range: NSRange, with replacement: String) {
+        guard let edit = textBuffer.replaceCharacters(in: range, with: replacement) else {
+            let nsMarkdown = markdown as NSString
+            markdown = nsMarkdown.replacingCharacters(in: range, with: replacement)
+            return
+        }
+
+        publishTextBufferSnapshot(using: edit)
+    }
+
+    private func publishTextBufferSnapshot(using edit: TextBufferEdit) {
+        pendingTextBufferEdit = edit
+        isPublishingTextBufferSnapshot = true
+        markdown = textBuffer.text
+        isPublishingTextBufferSnapshot = false
+        pendingTextBufferEdit = nil
     }
 
     private func registerUndoSnapshot(_ previous: String, replacingWith next: String) {
         guard !isApplyingHistory, previous != next else {
             return
         }
-        if undoStack.last != previous {
-            undoStack.append(previous)
+        guard let edit = DocumentEditDelta(oldText: previous, newText: next, selectionBefore: selectedRange) else {
+            return
         }
-        if undoStack.count > 200 {
-            undoStack.removeFirst(undoStack.count - 200)
+
+        registerUndoDelta(edit)
+    }
+
+    private func registerUndoEdit(_ textBufferEdit: TextBufferEdit) {
+        guard !isApplyingHistory else {
+            return
         }
+
+        registerUndoDelta(DocumentEditDelta(
+            textBufferEdit: textBufferEdit,
+            selectionBefore: selectedRange
+        ))
+    }
+
+    private func registerUndoDelta(_ edit: DocumentEditDelta) {
+        guard edit.oldFragment != edit.newFragment || edit.oldRange != edit.newRange else {
+            return
+        }
+
+        let now = Date()
+        if
+            let lastEdit = undoStack.last,
+            let lastUndoRegistrationDate,
+            now.timeIntervalSince(lastUndoRegistrationDate) <= Self.undoCoalescingInterval,
+            let mergedEdit = lastEdit.merging(with: edit)
+        {
+            undoMemoryCost -= lastEdit.memoryCost
+            undoStack[undoStack.count - 1] = mergedEdit
+            undoMemoryCost += mergedEdit.memoryCost
+        } else {
+            undoStack.append(edit)
+            undoMemoryCost += edit.memoryCost
+        }
+        lastUndoRegistrationDate = now
+        trimUndoStackIfNeeded()
         redoStack.removeAll()
+        redoMemoryCost = 0
+    }
+
+    private func clearEditingHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+        undoMemoryCost = 0
+        redoMemoryCost = 0
+        lastUndoRegistrationDate = nil
+    }
+
+    private func trimUndoStackIfNeeded() {
+        while undoStack.count > 200 || undoMemoryCost > Self.undoMemoryBudget {
+            guard !undoStack.isEmpty else {
+                undoMemoryCost = 0
+                return
+            }
+            let removed = undoStack.removeFirst()
+            undoMemoryCost -= removed.memoryCost
+        }
+    }
+
+    private func trimRedoStackIfNeeded() {
+        while redoStack.count > 200 || redoMemoryCost > Self.undoMemoryBudget {
+            guard !redoStack.isEmpty else {
+                redoMemoryCost = 0
+                return
+            }
+            let removed = redoStack.removeFirst()
+            redoMemoryCost -= removed.memoryCost
+        }
     }
 
     func confirmDiscardUnsavedChangesIfNeeded() -> Bool {
@@ -1409,7 +1830,7 @@ final class DocumentStore: ObservableObject {
         )
     }
 
-    private func workspaceSearchResults(
+    private func makeWorkspaceSearchResults(
         matching rawQuery: String,
         includeDirectories: Bool,
         includeUnsupportedFiles: Bool
@@ -1439,10 +1860,8 @@ final class DocumentStore: ObservableObject {
 
             guard
                 file.isTextLike,
-                let contents = try? String(contentsOf: file.url, encoding: .utf8),
-                let matchingLine = contents
-                    .components(separatedBy: .newlines)
-                    .first(where: { $0.localizedCaseInsensitiveContains(query) })
+                let matchingLine = cachedTextContent(for: file)?
+                    .firstLine(containing: query)
             else {
                 return nil
             }
@@ -1453,6 +1872,39 @@ final class DocumentStore: ObservableObject {
                 snippet: matchingLine.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
+    }
+
+    private func cachedTextContent(for file: WorkspaceFile) -> WorkspaceTextContent? {
+        guard !file.isDirectory, file.isTextLike else {
+            return nil
+        }
+
+        guard
+            let values = try? file.url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+            let fileSize = values.fileSize,
+            fileSize <= Self.workspaceContentSearchFileSizeLimit
+        else {
+            return nil
+        }
+
+        let modifiedAt = values.contentModificationDate
+        if let cached = workspaceTextCache[file.id],
+           cached.fileSize == fileSize,
+           cached.modifiedAt == modifiedAt {
+            return cached.content
+        }
+
+        guard let text = try? String(contentsOf: file.url, encoding: .utf8) else {
+            return nil
+        }
+
+        let content = WorkspaceTextContent(text: text)
+        workspaceTextCache[file.id] = WorkspaceTextCacheEntry(
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            content: content
+        )
+        return content
     }
 
     private func markdownPath(for url: URL) -> String {
@@ -1580,7 +2032,7 @@ final class DocumentStore: ObservableObject {
             location: table.blockRange.location,
             length: table.blockRange.length
         )
-        markdown = nsMarkdown.replacingCharacters(in: replaceRange, with: replacement)
+        replaceMarkdownCharacters(in: replaceRange, with: replacement)
         selectedRange = NSRange(location: table.blockRange.location, length: 0)
         statusMessage = mutableTable.status ?? strings.formatTable
     }
@@ -1591,6 +2043,37 @@ final class DocumentStore: ObservableObject {
             UTType(filenameExtension: "markdown"),
             .plainText,
         ].compactMap { $0 }
+    }
+
+    private static func scanWorkspaceFiles(in workspaceURL: URL) -> [WorkspaceFile] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: workspaceURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var files: [WorkspaceFile] = []
+        for case let url as URL in enumerator {
+            guard let resourceValues = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey]) else {
+                continue
+            }
+            let isDirectory = resourceValues.isDirectory == true
+            let isRegularFile = resourceValues.isRegularFile == true
+            guard isDirectory || isRegularFile else { continue }
+
+            let relativePath = url.relativePath(from: workspaceURL) ?? url.lastPathComponent
+            files.append(WorkspaceFile(
+                id: url.path,
+                url: url,
+                relativePath: relativePath,
+                isDirectory: isDirectory,
+                isTextLike: !isDirectory && Self.isTextLikeURL(url)
+            ))
+        }
+
+        return files.sorted(by: Self.sortWorkspaceFiles)
     }
 
     private static func parentPath(for relativePath: String) -> String {
@@ -1934,6 +2417,196 @@ private struct MarkdownLine {
         }
 
         return result
+    }
+}
+
+private struct DocumentEditDelta: Equatable {
+    let oldRange: NSRange
+    let newRange: NSRange
+    let oldFragment: String
+    let newFragment: String
+    let selectionBefore: NSRange
+    let selectionAfter: NSRange
+
+    private init(
+        oldRange: NSRange,
+        newRange: NSRange,
+        oldFragment: String,
+        newFragment: String,
+        selectionBefore: NSRange,
+        selectionAfter: NSRange
+    ) {
+        self.oldRange = oldRange
+        self.newRange = newRange
+        self.oldFragment = oldFragment
+        self.newFragment = newFragment
+        self.selectionBefore = selectionBefore
+        self.selectionAfter = selectionAfter
+    }
+
+    init?(oldText: String, newText: String, selectionBefore: NSRange) {
+        guard let edit = MarkdownTextEdit.diff(old: oldText, new: newText) else {
+            return nil
+        }
+
+        let oldNSString = oldText as NSString
+        let newNSString = newText as NSString
+        guard NSMaxRange(edit.oldRange) <= oldNSString.length,
+              NSMaxRange(edit.newRange) <= newNSString.length else {
+            return nil
+        }
+
+        oldRange = edit.oldRange
+        newRange = edit.newRange
+        oldFragment = oldNSString.substring(with: edit.oldRange)
+        newFragment = newNSString.substring(with: edit.newRange)
+        self.selectionBefore = selectionBefore
+        selectionAfter = NSRange(location: edit.newRange.location + edit.newRange.length, length: 0)
+    }
+
+    init(textBufferEdit: TextBufferEdit, selectionBefore: NSRange) {
+        oldRange = textBufferEdit.oldRange
+        newRange = textBufferEdit.newRange
+        oldFragment = textBufferEdit.oldFragment
+        newFragment = textBufferEdit.newFragment
+        self.selectionBefore = selectionBefore
+        selectionAfter = NSRange(
+            location: textBufferEdit.newRange.location + textBufferEdit.newRange.length,
+            length: 0
+        )
+    }
+
+    var memoryCost: Int {
+        (oldFragment as NSString).length * 2 + (newFragment as NSString).length * 2 + 128
+    }
+
+    func reverting(_ text: String) -> String? {
+        let nsText = text as NSString
+        guard NSMaxRange(newRange) <= nsText.length,
+              nsText.substring(with: newRange) == newFragment else {
+            return nil
+        }
+        return nsText.replacingCharacters(in: newRange, with: oldFragment)
+    }
+
+    func reapplying(_ text: String) -> String? {
+        let nsText = text as NSString
+        guard NSMaxRange(oldRange) <= nsText.length,
+              nsText.substring(with: oldRange) == oldFragment else {
+            return nil
+        }
+        return nsText.replacingCharacters(in: oldRange, with: newFragment)
+    }
+
+    func merging(with next: DocumentEditDelta) -> DocumentEditDelta? {
+        if let insertion = mergingAdjacentInsertion(with: next) {
+            return insertion
+        }
+
+        if let forwardDelete = mergingForwardDelete(with: next) {
+            return forwardDelete
+        }
+
+        if let backspaceDelete = mergingBackspaceDelete(with: next) {
+            return backspaceDelete
+        }
+
+        return nil
+    }
+
+    private func mergingAdjacentInsertion(with next: DocumentEditDelta) -> DocumentEditDelta? {
+        guard oldRange.length == 0,
+              next.oldRange.length == 0,
+              oldFragment.isEmpty,
+              next.oldFragment.isEmpty,
+              NSMaxRange(newRange) == next.newRange.location else {
+            return nil
+        }
+
+        return DocumentEditDelta(
+            oldRange: oldRange,
+            newRange: NSRange(
+                location: newRange.location,
+                length: newRange.length + next.newRange.length
+            ),
+            oldFragment: "",
+            newFragment: newFragment + next.newFragment,
+            selectionBefore: selectionBefore,
+            selectionAfter: next.selectionAfter
+        )
+    }
+
+    private func mergingForwardDelete(with next: DocumentEditDelta) -> DocumentEditDelta? {
+        guard newRange.length == 0,
+              next.newRange.length == 0,
+              newFragment.isEmpty,
+              next.newFragment.isEmpty,
+              oldRange.location == next.oldRange.location else {
+            return nil
+        }
+
+        return DocumentEditDelta(
+            oldRange: NSRange(
+                location: oldRange.location,
+                length: oldRange.length + next.oldRange.length
+            ),
+            newRange: newRange,
+            oldFragment: oldFragment + next.oldFragment,
+            newFragment: "",
+            selectionBefore: selectionBefore,
+            selectionAfter: next.selectionAfter
+        )
+    }
+
+    private func mergingBackspaceDelete(with next: DocumentEditDelta) -> DocumentEditDelta? {
+        guard newRange.length == 0,
+              next.newRange.length == 0,
+              newFragment.isEmpty,
+              next.newFragment.isEmpty,
+              NSMaxRange(next.oldRange) == oldRange.location else {
+            return nil
+        }
+
+        return DocumentEditDelta(
+            oldRange: NSRange(
+                location: next.oldRange.location,
+                length: next.oldRange.length + oldRange.length
+            ),
+            newRange: NSRange(location: next.newRange.location, length: 0),
+            oldFragment: next.oldFragment + oldFragment,
+            newFragment: "",
+            selectionBefore: selectionBefore,
+            selectionAfter: next.selectionAfter
+        )
+    }
+}
+
+private struct WorkspaceTextCacheEntry {
+    let fileSize: Int
+    let modifiedAt: Date?
+    let content: WorkspaceTextContent
+}
+
+private struct WorkspaceTextContent {
+    let text: String
+
+    func firstLine(containing query: String) -> String? {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedQuery.isEmpty else {
+            return nil
+        }
+        guard let matchRange = text.range(
+            of: normalizedQuery,
+            options: [.caseInsensitive, .diacriticInsensitive]
+        ) else {
+            return nil
+        }
+
+        let nsText = text as NSString
+        let nsMatchRange = NSRange(matchRange, in: text)
+        let lineRange = nsText.lineRange(for: NSRange(location: nsMatchRange.location, length: 0))
+        return nsText.substring(with: lineRange)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

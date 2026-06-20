@@ -12,6 +12,7 @@ release/
 build/
 
 # Local-only scripts and secrets.
+AGENTS.md
 scripts/local/
 scripts/private/
 *.local.sh

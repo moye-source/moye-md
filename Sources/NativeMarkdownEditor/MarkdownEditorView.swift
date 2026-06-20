@@ -2,24 +2,41 @@ import AppKit
 import SwiftUI
 
 struct MarkdownEditorView: NSViewRepresentable {
+    private static let minimumTextContainerWidth: CGFloat = 120
+    private static let overlayScrollerReservedWidth: CGFloat = 18
+    static let visibleBoundsPublishDelay: TimeInterval = 0.03
+
     @Binding var text: String
     @Binding var selectedRange: NSRange
+    let contentRevision: Int
     let focusModeEnabled: Bool
     let typewriterModeEnabled: Bool
     let lineNumbersEnabled: Bool
     let autoPairEnabled: Bool
     let scrollTarget: SourceLineScrollTarget?
+    let onTextEdit: (SourceLineIndexEdit, NSRange, () -> String) -> Void
     let onVisibleSourceLineChange: (Int) -> Void
     let onInsertImageURLs: ([URL]) -> Void
     let onPasteImage: (NSPasteboard) -> Bool
+
+    static func configureLargeTextLayout(for textView: NSTextView) {
+        textView.layoutManager?.allowsNonContiguousLayout = true
+        textView.layoutManager?.backgroundLayoutEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
             selectedRange: $selectedRange,
+            contentRevision: contentRevision,
             focusModeEnabled: focusModeEnabled,
             typewriterModeEnabled: typewriterModeEnabled,
             autoPairEnabled: autoPairEnabled,
+            onTextEdit: onTextEdit,
             onVisibleSourceLineChange: onVisibleSourceLineChange
         )
     }
@@ -44,6 +61,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         )
         textView.delegate = context.coordinator
         textView.string = text
+        context.coordinator.rebuildLineIndex(for: textView)
         if let safeRange = selectedRange.clamped(toLength: (text as NSString).length) {
             context.coordinator.isApplyingExternalUpdate = true
             textView.setSelectedRange(safeRange)
@@ -66,6 +84,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
+        Self.configureLargeTextLayout(for: textView)
         textView.insertImageURLs = onInsertImageURLs
         textView.pasteImage = onPasteImage
         textView.registerForDraggedTypes([.fileURL])
@@ -79,25 +98,28 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.containerSize = NSSize(
-            width: initialTextWidth,
+            width: Self.textContainerWidth(for: initialTextWidth, textView: textView),
             height: CGFloat.greatestFiniteMagnitude
         )
-        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.widthTracksTextView = false
 
         scrollView.documentView = textView
         let coordinator = context.coordinator
         scrollView.onVisibleBoundsChange = { [weak coordinator] in
-            coordinator?.publishVisibleSourceLine()
+            coordinator?.scheduleVisibleSourceLinePublish()
         }
-        context.coordinator.textView = textView
+        coordinator.observeVisibleBoundsChanges(in: scrollView)
+        coordinator.textView = textView
         configureLineNumbers(for: scrollView, textView: textView, enabled: lineNumbersEnabled)
-        context.coordinator.applySyntaxHighlighting(to: textView)
-        Self.updateTextContainerGeometry(for: scrollView, textView: textView)
-        DispatchQueue.main.async { [weak scrollView, weak textView] in
-            guard let scrollView, let textView else {
+        coordinator.applySyntaxHighlighting(to: textView)
+        Self.updateTextContainerGeometry(for: scrollView, textView: textView, recalculateHeight: true)
+        coordinator.rememberGeometryUpdate(for: scrollView, textView: textView)
+        DispatchQueue.main.async { [weak scrollView, weak textView, weak coordinator] in
+            guard let scrollView, let textView, let coordinator else {
                 return
             }
-            Self.updateTextContainerGeometry(for: scrollView, textView: textView)
+            Self.updateTextContainerGeometry(for: scrollView, textView: textView, recalculateHeight: true)
+            coordinator.rememberGeometryUpdate(for: scrollView, textView: textView)
         }
 
         return scrollView
@@ -111,27 +133,40 @@ struct MarkdownEditorView: NSViewRepresentable {
         context.coordinator.focusModeEnabled = focusModeEnabled
         context.coordinator.typewriterModeEnabled = typewriterModeEnabled
         context.coordinator.autoPairEnabled = autoPairEnabled
+        context.coordinator.onTextEdit = onTextEdit
         context.coordinator.onVisibleSourceLineChange = onVisibleSourceLineChange
-        Self.updateTextContainerGeometry(for: scrollView, textView: textView)
-        configureLineNumbers(for: scrollView, textView: textView, enabled: lineNumbersEnabled)
         let pendingScrollTarget = scrollTarget.flatMap { target in
             context.coordinator.shouldApplyScrollTarget(target) ? target : nil
         }
+        var shouldRecalculateHeight = context.coordinator.consumeGeometryRecalculation()
 
-        if textView.string != text {
-            guard !textView.hasMarkedText() else {
-                return
+        if context.coordinator.shouldApplyTextBinding(contentRevision: contentRevision) {
+            if context.coordinator.consumeDirectEditEchoIfMatching(
+                text: text,
+                textView: textView,
+                contentRevision: contentRevision
+            ) {
+                // The NSTextView already contains this local edit; only SwiftUI's binding echo caught up.
+            } else {
+                guard !textView.hasMarkedText() else {
+                    return
+                }
+
+                let selectedRanges = textView.selectedRanges
+                let textLength = (text as NSString).length
+                context.coordinator.isApplyingExternalUpdate = true
+                textView.string = text
+                context.coordinator.noteTextChanged()
+                context.coordinator.rebuildLineIndex(for: textView)
+                textView.selectedRanges = selectedRanges.clampedSelectionRanges(
+                    toLength: textLength,
+                    fallback: selectedRange
+                )
+                context.coordinator.markGeometryNeedsRecalculation()
+                shouldRecalculateHeight = true
+                context.coordinator.rememberTextBindingApplied(contentRevision: contentRevision)
+                context.coordinator.isApplyingExternalUpdate = false
             }
-
-            let selectedRanges = textView.selectedRanges
-            let textLength = (text as NSString).length
-            context.coordinator.isApplyingExternalUpdate = true
-            textView.string = text
-            textView.selectedRanges = selectedRanges.clampedSelectionRanges(
-                toLength: textLength,
-                fallback: selectedRange
-            )
-            context.coordinator.isApplyingExternalUpdate = false
         }
 
         if
@@ -149,11 +184,28 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
 
         context.coordinator.applySyntaxHighlighting(to: textView)
-        Self.updateTextContainerGeometry(for: scrollView, textView: textView)
+        configureLineNumbers(for: scrollView, textView: textView, enabled: lineNumbersEnabled)
+        if context.coordinator.needsGeometryUpdate(
+            for: scrollView,
+            textView: textView,
+            recalculateHeight: shouldRecalculateHeight
+        ) {
+            Self.updateTextContainerGeometry(
+                for: scrollView,
+                textView: textView,
+                recalculateHeight: shouldRecalculateHeight
+            )
+            context.coordinator.rememberGeometryUpdate(for: scrollView, textView: textView)
+        }
 
         if let pendingScrollTarget {
             context.coordinator.applyScrollTarget(pendingScrollTarget)
         }
+        context.coordinator.observeVisibleBoundsChanges(in: scrollView)
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.stopObservingVisibleBoundsChanges()
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -164,29 +216,47 @@ struct MarkdownEditorView: NSViewRepresentable {
         var focusModeEnabled: Bool
         var typewriterModeEnabled: Bool
         var autoPairEnabled: Bool
+        var onTextEdit: (SourceLineIndexEdit, NSRange, () -> String) -> Void
         var onVisibleSourceLineChange: (Int) -> Void
         private var lastSelectionPublishedToSwiftUI: NSRange?
         private var isApplyingSyntaxHighlighting = false
         private var isApplyingScrollTarget = false
         private var lastAppliedScrollTarget: SourceLineScrollTarget?
         private var lastPublishedVisibleSourceLine: Int?
-        private var lastHighlightedText: String?
+        private var textRevision = 0
+        private var lastHighlightedTextRevision: Int?
         private var lastHighlightedFocusRange: NSRange?
         private var pendingScrollReapply: DispatchWorkItem?
+        private var needsGeometryRecalculation = true
+        private var sourceLineIndex = SourceLineIndex(text: "")
+        private var pendingLineIndexEdit: SourceLineIndexEdit?
+        private var lastGeometryContentSize: NSSize?
+        private var lastGeometryTextContainerInset: NSSize?
+        private var lastGeometryTextLength: Int?
+        private var visibleBoundsObserver: NSObjectProtocol?
+        private weak var observedScrollView: NSScrollView?
+        private var pendingVisibleBoundsPublish: DispatchWorkItem?
+        private var pendingDirectEditEchoTextLength: Int?
+        private var pendingDirectEditEchoContentRevision: Int?
+        private var lastAppliedContentRevision: Int
 
         init(
             text: Binding<String>,
             selectedRange: Binding<NSRange>,
+            contentRevision: Int,
             focusModeEnabled: Bool,
             typewriterModeEnabled: Bool,
             autoPairEnabled: Bool,
+            onTextEdit: @escaping (SourceLineIndexEdit, NSRange, () -> String) -> Void,
             onVisibleSourceLineChange: @escaping (Int) -> Void
         ) {
             self.text = text
             self.selectedRange = selectedRange
+            lastAppliedContentRevision = contentRevision
             self.focusModeEnabled = focusModeEnabled
             self.typewriterModeEnabled = typewriterModeEnabled
             self.autoPairEnabled = autoPairEnabled
+            self.onTextEdit = onTextEdit
             self.onVisibleSourceLineChange = onVisibleSourceLineChange
         }
 
@@ -195,6 +265,11 @@ struct MarkdownEditorView: NSViewRepresentable {
             shouldChangeTextIn affectedCharRange: NSRange,
             replacementString: String?
         ) -> Bool {
+            pendingLineIndexEdit = SourceLineIndexEdit(
+                range: affectedCharRange,
+                replacement: replacementString ?? ""
+            )
+
             guard autoPairEnabled, let replacementString, replacementString.count == 1 else {
                 return true
             }
@@ -217,6 +292,7 @@ struct MarkdownEditorView: NSViewRepresentable {
                 affectedCharRange.location < nsString.length,
                 nsString.substring(with: NSRange(location: affectedCharRange.location, length: 1)) == replacementString
             {
+                pendingLineIndexEdit = nil
                 textView.setSelectedRange(NSRange(location: affectedCharRange.location + 1, length: 0))
                 syncSelection(from: textView)
                 return false
@@ -229,9 +305,14 @@ struct MarkdownEditorView: NSViewRepresentable {
             let selectedText = affectedCharRange.length > 0 ? nsString.substring(with: affectedCharRange) : ""
             let insertedText = replacementString + selectedText + closing
             guard textView.shouldChangeText(in: affectedCharRange, replacementString: insertedText) else {
+                pendingLineIndexEdit = nil
                 return false
             }
 
+            pendingLineIndexEdit = SourceLineIndexEdit(
+                range: affectedCharRange,
+                replacement: insertedText
+            )
             textView.textStorage?.replaceCharacters(in: affectedCharRange, with: insertedText)
             let nextSelection = selectedText.isEmpty
                 ? NSRange(location: affectedCharRange.location + 1, length: 0)
@@ -249,13 +330,87 @@ struct MarkdownEditorView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
-            text.wrappedValue = textView.string
+            noteTextChanged()
+            let directEdit = pendingLineIndexEdit
+            updateLineIndexAfterTextChange(for: textView)
+            if let directEdit {
+                pendingDirectEditEchoTextLength = (textView.string as NSString).length
+                pendingDirectEditEchoContentRevision = lastAppliedContentRevision + 1
+                onTextEdit(directEdit, textView.selectedRange()) { [weak textView] in
+                    textView?.string ?? ""
+                }
+            } else {
+                text.wrappedValue = textView.string
+            }
+            markGeometryNeedsRecalculation()
             if !textView.hasMarkedText() {
                 syncSelection(from: textView)
                 applySyntaxHighlighting(to: textView)
             }
             refreshLineNumbers(for: textView)
             publishVisibleSourceLine()
+        }
+
+        func rebuildLineIndex(for textView: NSTextView) {
+            pendingLineIndexEdit = nil
+            sourceLineIndex = SourceLineIndex(text: textView.string)
+            (textView as? MarkdownTextView)?.sourceLineIndex = sourceLineIndex
+        }
+
+        func updateLineIndexAfterTextChange(for textView: NSTextView) {
+            let textLength = (textView.string as NSString).length
+            if
+                let pendingLineIndexEdit,
+                let updatedLineIndex = sourceLineIndex.updating(
+                    with: pendingLineIndexEdit,
+                    newTextLength: textLength
+                )
+            {
+                sourceLineIndex = updatedLineIndex
+                (textView as? MarkdownTextView)?.sourceLineIndex = updatedLineIndex
+            } else {
+                rebuildLineIndex(for: textView)
+            }
+            pendingLineIndexEdit = nil
+        }
+
+        func shouldApplyTextBinding(contentRevision: Int) -> Bool {
+            contentRevision != lastAppliedContentRevision
+        }
+
+        func rememberTextBindingApplied(contentRevision: Int) {
+            lastAppliedContentRevision = contentRevision
+            pendingDirectEditEchoTextLength = nil
+            pendingDirectEditEchoContentRevision = nil
+        }
+
+        func consumeDirectEditEchoIfMatching(
+            text: String,
+            textView: NSTextView,
+            contentRevision: Int
+        ) -> Bool {
+            guard
+                let pendingDirectEditEchoTextLength,
+                pendingDirectEditEchoContentRevision == contentRevision
+            else {
+                return false
+            }
+
+            let bindingLength = (text as NSString).length
+            let textViewLength = (textView.string as NSString).length
+            guard bindingLength == pendingDirectEditEchoTextLength,
+                  textViewLength == pendingDirectEditEchoTextLength else {
+                return false
+            }
+
+            self.pendingDirectEditEchoTextLength = nil
+            pendingDirectEditEchoContentRevision = nil
+            lastAppliedContentRevision = contentRevision
+            return true
+        }
+
+        func noteTextChanged() {
+            textRevision += 1
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -302,15 +457,59 @@ struct MarkdownEditorView: NSViewRepresentable {
             lastSelectionPublishedToSwiftUI = range
         }
 
+        func markGeometryNeedsRecalculation() {
+            needsGeometryRecalculation = true
+        }
+
+        func consumeGeometryRecalculation() -> Bool {
+            let value = needsGeometryRecalculation
+            needsGeometryRecalculation = false
+            return value
+        }
+
+        func needsGeometryUpdate(
+            for scrollView: NSScrollView,
+            textView: NSTextView,
+            recalculateHeight: Bool
+        ) -> Bool {
+            if recalculateHeight {
+                return true
+            }
+
+            guard
+                let lastGeometryContentSize,
+                let lastGeometryTextContainerInset,
+                let lastGeometryTextLength
+            else {
+                return true
+            }
+
+            let textLength = (textView.string as NSString).length
+            return !Self.isSameSize(lastGeometryContentSize, scrollView.contentSize) ||
+                !Self.isSameSize(lastGeometryTextContainerInset, textView.textContainerInset) ||
+                lastGeometryTextLength != textLength
+        }
+
+        func rememberGeometryUpdate(for scrollView: NSScrollView, textView: NSTextView) {
+            lastGeometryContentSize = scrollView.contentSize
+            lastGeometryTextContainerInset = textView.textContainerInset
+            lastGeometryTextLength = (textView.string as NSString).length
+        }
+
+        private static func isSameSize(_ lhs: NSSize, _ rhs: NSSize) -> Bool {
+            abs(lhs.width - rhs.width) <= 0.5 && abs(lhs.height - rhs.height) <= 0.5
+        }
+
         func applySyntaxHighlighting(to textView: NSTextView) {
             guard !isApplyingSyntaxHighlighting, !textView.hasMarkedText() else {
                 return
             }
 
-            let currentText = textView.string
-            let currentFocusRange = focusModeEnabled ? textView.selectedRange() : nil
+            let characterCount = (textView.string as NSString).length
+            let canApplyFocusStyle = MarkdownSyntaxHighlighter.usesFullHighlighting(characterCount: characterCount)
+            let currentFocusRange = focusModeEnabled && canApplyFocusStyle ? textView.selectedRange() : nil
             guard
-                currentText != lastHighlightedText ||
+                lastHighlightedTextRevision != textRevision ||
                 currentFocusRange != lastHighlightedFocusRange
             else {
                 return
@@ -321,13 +520,40 @@ struct MarkdownEditorView: NSViewRepresentable {
                 to: textView,
                 focusRange: currentFocusRange
             )
-            lastHighlightedText = currentText
+            lastHighlightedTextRevision = textRevision
             lastHighlightedFocusRange = currentFocusRange
             isApplyingSyntaxHighlighting = false
         }
 
         func shouldApplyScrollTarget(_ target: SourceLineScrollTarget) -> Bool {
             lastAppliedScrollTarget != target
+        }
+
+        func observeVisibleBoundsChanges(in scrollView: NSScrollView) {
+            guard observedScrollView !== scrollView else {
+                return
+            }
+
+            stopObservingVisibleBoundsChanges()
+            observedScrollView = scrollView
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            visibleBoundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.scheduleVisibleSourceLinePublish()
+            }
+        }
+
+        func stopObservingVisibleBoundsChanges() {
+            pendingVisibleBoundsPublish?.cancel()
+            pendingVisibleBoundsPublish = nil
+            if let visibleBoundsObserver {
+                NotificationCenter.default.removeObserver(visibleBoundsObserver)
+            }
+            visibleBoundsObserver = nil
+            observedScrollView = nil
         }
 
         func applyScrollTarget(_ target: SourceLineScrollTarget) {
@@ -366,7 +592,7 @@ struct MarkdownEditorView: NSViewRepresentable {
                 return
             }
 
-            let line = visibleSourceLine(in: textView)
+            let line = MarkdownEditorView.visibleSourceLine(in: textView, sourceLineIndex: sourceLineIndex)
             guard line != lastPublishedVisibleSourceLine else {
                 return
             }
@@ -375,6 +601,22 @@ struct MarkdownEditorView: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 self?.onVisibleSourceLineChange(line)
             }
+        }
+
+        func scheduleVisibleSourceLinePublish() {
+            guard !isApplyingScrollTarget else {
+                return
+            }
+
+            pendingVisibleBoundsPublish?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                self?.publishVisibleSourceLine()
+            }
+            pendingVisibleBoundsPublish = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + MarkdownEditorView.visibleBoundsPublishDelay,
+                execute: work
+            )
         }
 
         private func centerCurrentSelection(in textView: NSTextView) {
@@ -404,7 +646,6 @@ struct MarkdownEditorView: NSViewRepresentable {
                 return
             }
 
-            layoutManager.ensureLayout(for: textContainer)
             let characterRange = sourceRange(for: target, in: textView.string)
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: characterRange,
@@ -443,54 +684,17 @@ struct MarkdownEditorView: NSViewRepresentable {
             textView.enclosingScrollView?.verticalRulerView?.needsDisplay = true
         }
 
-        private func visibleSourceLine(in textView: NSTextView) -> Int {
-            guard let scrollView = textView.enclosingScrollView else {
-                return 1
-            }
-
-            let visibleRect = scrollView.contentView.bounds
-            let point = NSPoint(
-                x: max(textView.textContainerInset.width + 2, visibleRect.minX + 2),
-                y: visibleRect.minY + textView.textContainerInset.height + 2
-            )
-            let characterIndex = textView.characterIndexForInsertion(at: point)
-            return sourceLineNumber(at: characterIndex, in: textView.string)
-        }
-
         private func sourceRange(forLine line: Int, in text: String) -> NSRange {
-            let targetLine = max(1, line)
             let nsString = text as NSString
-            guard nsString.length > 0, targetLine > 1 else {
+            guard nsString.length > 0 else {
                 return nsString.lineRange(for: NSRange(location: 0, length: 0))
             }
 
-            var currentLine = 1
-            for index in 0..<nsString.length {
-                guard nsString.character(at: index) == 10 else {
-                    continue
-                }
-
-                currentLine += 1
-                if currentLine == targetLine {
-                    return nsString.lineRange(for: NSRange(location: min(index + 1, nsString.length), length: 0))
-                }
+            let indexedRange = sourceLineIndex.range(forLine: line)
+            guard indexedRange.location <= nsString.length else {
+                return nsString.lineRange(for: NSRange(location: nsString.length, length: 0))
             }
-
-            return nsString.lineRange(for: NSRange(location: nsString.length, length: 0))
-        }
-
-        private func sourceLineNumber(at characterIndex: Int, in text: String) -> Int {
-            let nsString = text as NSString
-            let upperBound = min(max(0, characterIndex), nsString.length)
-            guard upperBound > 0 else {
-                return 1
-            }
-
-            var line = 1
-            for index in 0..<upperBound where nsString.character(at: index) == 10 {
-                line += 1
-            }
-            return line
+            return nsString.lineRange(for: NSRange(location: indexedRange.location, length: 0))
         }
     }
 
@@ -520,32 +724,65 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
     }
 
-    static func updateTextContainerGeometry(for scrollView: NSScrollView, textView: NSTextView) {
+    static func updateTextContainerGeometry(
+        for scrollView: NSScrollView,
+        textView: NSTextView,
+        recalculateHeight: Bool = true
+    ) {
         let contentWidth = max(scrollView.contentSize.width, 240)
+        let textContainerWidth = Self.textContainerWidth(for: contentWidth, textView: textView)
         var frame = textView.frame
         var didChangeFrame = false
+        var didChangeWidth = false
 
         if abs(frame.width - contentWidth) > 0.5 {
             frame.size.width = contentWidth
             didChangeFrame = true
+            didChangeWidth = true
         }
 
-        textView.textContainer?.containerSize = NSSize(
-            width: contentWidth,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        if didChangeFrame {
+            textView.frame = frame
+            didChangeFrame = false
+        }
 
-        if
-            let layoutManager = textView.layoutManager,
-            let textContainer = textView.textContainer
-        {
-            layoutManager.ensureLayout(for: textContainer)
-            let usedHeight = layoutManager.usedRect(for: textContainer).height
-            let targetHeight = max(
-                scrollView.contentSize.height,
-                ceil(usedHeight + textView.textContainerInset.height * 2 + 4)
-            )
+        if let textContainer = textView.textContainer {
+            let currentContainerSize = textContainer.containerSize
+            if abs(currentContainerSize.width - textContainerWidth) > 0.5 {
+                didChangeWidth = true
+            }
+            if textContainer.widthTracksTextView {
+                textContainer.widthTracksTextView = false
+            }
+            if
+                didChangeWidth ||
+                currentContainerSize.height != CGFloat.greatestFiniteMagnitude
+            {
+                textContainer.containerSize = NSSize(
+                    width: textContainerWidth,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+            }
+        }
+        if abs(textView.minSize.height - scrollView.contentSize.height) > 0.5 {
+            textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        }
+
+        if recalculateHeight || didChangeWidth {
+            let targetHeight = PerformanceDiagnostics.shared.measure(
+                "editor.geometry",
+                metadata: [
+                    "characters": "\((textView.string as NSString).length)",
+                    "recalculate": recalculateHeight ? "true" : "false",
+                    "width_changed": didChangeWidth ? "true" : "false",
+                ]
+            ) {
+                targetDocumentHeight(
+                    for: scrollView,
+                    textView: textView,
+                    textContainerWidth: textContainerWidth
+                )
+            }
 
             if abs(frame.height - targetHeight) > 0.5 {
                 frame.size.height = targetHeight
@@ -558,6 +795,110 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
 
         clampScrollPosition(in: scrollView)
+    }
+
+    static func visibleSourceLine(in textView: NSTextView, sourceLineIndex: SourceLineIndex) -> Int {
+        guard let scrollView = textView.enclosingScrollView else {
+            return 1
+        }
+
+        let visibleRect = scrollView.contentView.bounds
+        let pointInTextView = NSPoint(
+            x: max(textView.textContainerInset.width + 2, visibleRect.minX + 2),
+            y: visibleRect.minY + textView.textContainerInset.height + 2
+        )
+
+        if
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        {
+            let containerOrigin = textView.textContainerOrigin
+            let pointInContainer = NSPoint(
+                x: max(0, pointInTextView.x - containerOrigin.x),
+                y: max(0, pointInTextView.y - containerOrigin.y)
+            )
+            let visibleContainerRect = NSRect(
+                x: 0,
+                y: max(0, visibleRect.minY - containerOrigin.y),
+                width: max(textContainer.containerSize.width, visibleRect.width),
+                height: max(1, visibleRect.height)
+            )
+            layoutManager.ensureLayout(forBoundingRect: visibleContainerRect, in: textContainer)
+
+            let glyphCount = layoutManager.numberOfGlyphs
+            if glyphCount > 0 {
+                let visibleGlyphRange = layoutManager.glyphRange(
+                    forBoundingRect: visibleContainerRect,
+                    in: textContainer
+                )
+                if visibleGlyphRange.location != NSNotFound, visibleGlyphRange.length > 0 {
+                    let characterIndex = layoutManager.characterIndexForGlyph(at: visibleGlyphRange.location)
+                    return sourceLineIndex.lineNumber(at: characterIndex)
+                }
+
+                let glyphIndex = min(
+                    layoutManager.glyphIndex(for: pointInContainer, in: textContainer),
+                    glyphCount - 1
+                )
+                let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+                return sourceLineIndex.lineNumber(at: characterIndex)
+            }
+        }
+
+        let fallbackCharacterIndex = textView.characterIndexForInsertion(at: pointInTextView)
+        return sourceLineIndex.lineNumber(at: fallbackCharacterIndex)
+    }
+
+    private static func textContainerWidth(for contentWidth: CGFloat, textView: NSTextView) -> CGFloat {
+        let lineFragmentPadding = textView.textContainer?.lineFragmentPadding ?? 0
+        let reservedHorizontalSpace =
+            textView.textContainerInset.width * 2 +
+            lineFragmentPadding * 2 +
+            overlayScrollerReservedWidth
+
+        return max(minimumTextContainerWidth, contentWidth - reservedHorizontalSpace)
+    }
+
+    private static func targetDocumentHeight(
+        for scrollView: NSScrollView,
+        textView: NSTextView,
+        textContainerWidth: CGFloat
+    ) -> CGFloat {
+        let characterCount = (textView.string as NSString).length
+        let exactLayoutCharacterLimit = 250_000
+
+        if
+            characterCount <= exactLayoutCharacterLimit,
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        {
+            layoutManager.ensureLayout(for: textContainer)
+            let usedHeight = layoutManager.usedRect(for: textContainer).height
+            return max(
+                scrollView.contentSize.height,
+                ceil(usedHeight + textView.textContainerInset.height * 2 + 4)
+            )
+        }
+
+        return max(
+            scrollView.contentSize.height,
+            estimatedDocumentHeight(for: textView, textContainerWidth: textContainerWidth)
+        )
+    }
+
+    private static func estimatedDocumentHeight(for textView: NSTextView, textContainerWidth: CGFloat) -> CGFloat {
+        let sourceLineIndex = (textView as? MarkdownTextView)?.sourceLineIndex ?? SourceLineIndex(text: textView.string)
+        let usableWidth = max(80, textContainerWidth)
+        let font = textView.font ?? .monospacedSystemFont(ofSize: 15, weight: .regular)
+        let averageCharacterWidth = max(6, "m".size(withAttributes: [.font: font]).width)
+        let charactersPerVisualLine = max(24, Int(floor(usableWidth / averageCharacterWidth)))
+        let paragraphStyle = MarkdownSyntaxHighlighter.paragraphStyleForEditor()
+        let lineHeight = ceil(font.ascender - font.descender + font.leading + paragraphStyle.lineSpacing)
+        let visualLineCount = sourceLineIndex.estimatedVisualLineCount(
+            charactersPerVisualLine: charactersPerVisualLine
+        )
+
+        return ceil(CGFloat(visualLineCount) * lineHeight + textView.textContainerInset.height * 2 + 12)
     }
 
     private static func clampScrollPosition(in scrollView: NSScrollView) {
@@ -606,6 +947,7 @@ private final class MarkdownEditorScrollView: NSScrollView {
 private final class MarkdownTextView: NSTextView {
     var insertImageURLs: (([URL]) -> Void)?
     var pasteImage: ((NSPasteboard) -> Bool)?
+    var sourceLineIndex = SourceLineIndex(text: "")
     var lineNumbersEnabled = false {
         didSet {
             guard lineNumbersEnabled != oldValue else {
@@ -709,7 +1051,14 @@ private final class LineNumberGutterView: NSView {
         NSColor.controlBackgroundColor.setFill()
         dirtyRect.fill()
 
-        layoutManager.ensureLayout(for: textContainer)
+        let containerOrigin = textView.textContainerOrigin
+        let visibleContainerRect = NSRect(
+            x: 0,
+            y: max(0, visibleRect.minY - containerOrigin.y),
+            width: max(textContainer.containerSize.width, visibleRect.width),
+            height: max(1, visibleRect.height)
+        )
+        layoutManager.ensureLayout(forBoundingRect: visibleContainerRect, in: textContainer)
 
         let string = textView.string as NSString
         if string.length == 0 {
@@ -717,7 +1066,7 @@ private final class LineNumberGutterView: NSView {
             return
         }
 
-        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleContainerRect, in: textContainer)
         guard glyphRange.location != NSNotFound else {
             return
         }
@@ -726,14 +1075,20 @@ private final class LineNumberGutterView: NSView {
             forGlyphRange: glyphRange,
             actualGlyphRange: nil
         )
-        let fullRange = NSRange(location: 0, length: string.length)
-        var lineNumber = 1
+        let sourceLineIndex = (textView as? MarkdownTextView)?.sourceLineIndex ?? SourceLineIndex(text: textView.string)
+        let firstLine = max(1, sourceLineIndex.lineNumber(at: visibleCharacterRange.location) - 1)
+        let lastLine = min(
+            sourceLineIndex.lineCount,
+            sourceLineIndex.lineNumber(at: NSMaxRange(visibleCharacterRange)) + 1
+        )
+        guard firstLine <= lastLine else {
+            return
+        }
 
-        string.enumerateSubstrings(in: fullRange, options: [.byLines, .substringNotRequired]) { _, lineRange, enclosingRange, _ in
-            defer { lineNumber += 1 }
-
-            guard NSIntersectionRange(enclosingRange, visibleCharacterRange).length > 0 else {
-                return
+        for lineNumber in firstLine...lastLine {
+            let lineRange = sourceLineIndex.range(forLine: lineNumber)
+            guard NSIntersectionRange(lineRange, visibleCharacterRange).length > 0 else {
+                continue
             }
 
             let characterIndex = min(lineRange.location, max(0, string.length - 1))
