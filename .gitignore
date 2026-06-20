@@ -10,3 +10,11 @@ default.profraw
 dist/
 release/
 build/
+
+# Local-only scripts and secrets.
+scripts/local/
+scripts/private/
+*.local.sh
+.env
+.env.*
+!.env.example
