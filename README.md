@@ -4,7 +4,7 @@ Moye (`墨页`) is a native macOS Markdown editor for local writing.
 
 It is built with SwiftUI and AppKit. The editing core uses `NSTextView` for stable text input, selection, undo, and input-method behavior. Live preview is rendered separately with `WKWebView`.
 
-[中文说明](README.zh-CN.md) · [Disclaimer](DISCLAIMER.md) · [License](LICENSE)
+[中文说明](README.zh-CN.md) · [Disclaimer](DISCLAIMER.md) · [License](LICENSE) · [Promotion kit](docs/promotion-kit.zh-CN.md)
 
 ## Status
 
@@ -174,3 +174,5 @@ xcodebuild -project NativeMarkdownEditor.xcodeproj -scheme NativeMarkdownEditor 
 ## License
 
 Moye is released under the [MIT License](LICENSE).
+
+If you care about native Mac writing tools, stars, issues, feedback, and contributions are welcome.
