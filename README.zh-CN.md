@@ -21,12 +21,28 @@
 当前发布包格式：
 
 ```text
-Moye-0.1.2-macOS.zip
+Moye-0.1.3-macOS.zip
 ```
 
 当前版本暂未做 Apple Developer ID 签名和公证。macOS 首次打开时可能会提示“无法验证开发者”。请只运行你信任的构建包，并在使用前阅读 [免责声明](DISCLAIMER.md)。
 
 如果墨页不是从 `/Applications` 启动，首次打开时会提示移动到“应用程序”文件夹，并从安装后的位置重新启动。
+
+### 打开未签名版本
+
+在墨页完成 Apple Developer ID 签名和公证之前，macOS 可能会在软件启动前拦截。确认你信任这个下载包后：
+
+1. 先尝试打开一次墨页。
+2. 打开 **系统设置 > 隐私与安全性**。
+3. 在安全提示区域选择允许墨页打开。
+4. 再次启动墨页。成功启动后，墨页会提示移动到“应用程序”文件夹。
+
+如果只是你自己的本地测试构建，也可以移除 quarantine 标记：
+
+```bash
+xattr -dr com.apple.quarantine /path/to/Moye.app
+open /path/to/Moye.app
+```
 
 ## 更新
 
@@ -108,13 +124,13 @@ xcodebuild -project NativeMarkdownEditor.xcodeproj -scheme NativeMarkdownEditor 
 打包发布 zip：
 
 ```bash
-./scripts/package-macos.sh 0.1.2
+./scripts/package-macos.sh 0.1.3
 ```
 
 输出位置：
 
 ```text
-dist/Moye-0.1.2-macOS.zip
+dist/Moye-0.1.3-macOS.zip
 ```
 
 ## 发布流程
@@ -122,14 +138,14 @@ dist/Moye-0.1.2-macOS.zip
 仓库已经配置 GitHub Actions。推送 `v` 开头的 tag 时，会自动打包 macOS App 并创建 GitHub Release。
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 Release workflow 会生成并上传：
 
 ```text
-Moye-0.1.2-macOS.zip
+Moye-0.1.3-macOS.zip
 ```
 
 ## 项目结构

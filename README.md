@@ -21,12 +21,28 @@ Download the latest macOS build from GitHub Releases:
 Current package format:
 
 ```text
-Moye-0.1.2-macOS.zip
+Moye-0.1.3-macOS.zip
 ```
 
 The app is currently unsigned and not notarized. macOS may show a Gatekeeper warning the first time you open it. Only run builds you trust. See [Disclaimer](DISCLAIMER.md).
 
 When Moye is launched outside `/Applications`, it asks to move itself to the Applications folder and relaunch from there.
+
+### Opening unsigned builds
+
+Until Moye has Apple Developer ID signing and notarization, macOS may block the app before it can start. If you trust the downloaded build:
+
+1. Try opening it once.
+2. Open **System Settings > Privacy & Security**.
+3. Choose **Open Anyway** for Moye.
+4. Launch Moye again. After it starts, it can offer to move itself to `/Applications`.
+
+For your own local test builds, you can also remove the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /path/to/Moye.app
+open /path/to/Moye.app
+```
 
 ## Updates
 
@@ -108,13 +124,13 @@ Build and open a local debug app:
 Package a release zip:
 
 ```bash
-./scripts/package-macos.sh 0.1.2
+./scripts/package-macos.sh 0.1.3
 ```
 
 Output:
 
 ```text
-dist/Moye-0.1.2-macOS.zip
+dist/Moye-0.1.3-macOS.zip
 ```
 
 ## Release Flow
@@ -122,11 +138,11 @@ dist/Moye-0.1.2-macOS.zip
 GitHub Actions creates a release asset when a tag starting with `v` is pushed.
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
-The release workflow builds the macOS app, creates `Moye-0.1.2-macOS.zip`, and uploads it to GitHub Releases.
+The release workflow builds the macOS app, creates `Moye-0.1.3-macOS.zip`, and uploads it to GitHub Releases.
 
 ## Project Structure
 

@@ -27,6 +27,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cat > release-notes.md <<'EOF'
+          Download the macOS app zip below.
+
+          This build is currently unsigned and not notarized. macOS may block it before the app can start. If you trust this build, open **System Settings > Privacy & Security** after the first blocked launch and allow Moye to open. Once Moye starts, it can offer to move itself to `/Applications`.
+
+          当前版本暂未做 Apple Developer ID 签名和公证。macOS 可能会在软件启动前拦截。确认信任该构建后，请在首次拦截后打开 **系统设置 > 隐私与安全性**，允许墨页打开。墨页成功启动后，会提示移动到“应用程序”文件夹。
+          EOF
+
           gh release create "$GITHUB_REF_NAME" "${{ steps.package.outputs.zip_path }}" \
             --title "Moye ${GITHUB_REF_NAME}" \
-            --notes "Download the macOS app zip below. This build is currently unsigned and may require manual approval in macOS Gatekeeper."
+            --notes-file release-notes.md
