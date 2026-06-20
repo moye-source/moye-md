@@ -21,7 +21,7 @@ Download the latest macOS build from GitHub Releases:
 Current package format:
 
 ```text
-Moye-0.1.0-macOS.zip
+Moye-0.1.1-macOS.zip
 ```
 
 The app is currently unsigned and not notarized. macOS may show a Gatekeeper warning the first time you open it. Only run builds you trust. See [Disclaimer](DISCLAIMER.md).
@@ -106,13 +106,13 @@ Build and open a local debug app:
 Package a release zip:
 
 ```bash
-./scripts/package-macos.sh 0.1.0
+./scripts/package-macos.sh 0.1.1
 ```
 
 Output:
 
 ```text
-dist/Moye-0.1.0-macOS.zip
+dist/Moye-0.1.1-macOS.zip
 ```
 
 ## Release Flow
@@ -120,11 +120,11 @@ dist/Moye-0.1.0-macOS.zip
 GitHub Actions creates a release asset when a tag starting with `v` is pushed.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
-The release workflow builds the macOS app, creates `Moye-0.1.0-macOS.zip`, and uploads it to GitHub Releases.
+The release workflow builds the macOS app, creates `Moye-0.1.1-macOS.zip`, and uploads it to GitHub Releases.
 
 ## Project Structure
 

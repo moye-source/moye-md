@@ -21,7 +21,7 @@
 当前发布包格式：
 
 ```text
-Moye-0.1.0-macOS.zip
+Moye-0.1.1-macOS.zip
 ```
 
 当前版本暂未做 Apple Developer ID 签名和公证。macOS 首次打开时可能会提示“无法验证开发者”。请只运行你信任的构建包，并在使用前阅读 [免责声明](DISCLAIMER.md)。
@@ -106,13 +106,13 @@ xcodebuild -project NativeMarkdownEditor.xcodeproj -scheme NativeMarkdownEditor 
 打包发布 zip：
 
 ```bash
-./scripts/package-macos.sh 0.1.0
+./scripts/package-macos.sh 0.1.1
 ```
 
 输出位置：
 
 ```text
-dist/Moye-0.1.0-macOS.zip
+dist/Moye-0.1.1-macOS.zip
 ```
 
 ## 发布流程
@@ -120,14 +120,14 @@ dist/Moye-0.1.0-macOS.zip
 仓库已经配置 GitHub Actions。推送 `v` 开头的 tag 时，会自动打包 macOS App 并创建 GitHub Release。
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 Release workflow 会生成并上传：
 
 ```text
-Moye-0.1.0-macOS.zip
+Moye-0.1.1-macOS.zip
 ```
 
 ## 项目结构
