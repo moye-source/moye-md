@@ -24,7 +24,7 @@ Save the token in 1Password:
 The script stores the token in:
 
 ```text
-op://Private/GitHub moye-source API token/token
+op://Private/GitHub Personal Access Token/token
 ```
 
 ## Update Repository Metadata

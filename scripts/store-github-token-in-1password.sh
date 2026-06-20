@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VAULT="${OP_VAULT:-Private}"
-ITEM_TITLE="${OP_GITHUB_TOKEN_ITEM:-GitHub moye-source API token}"
+ITEM_TITLE="${OP_GITHUB_TOKEN_ITEM:-GitHub Personal Access Token}"
 FIELD_NAME="${OP_GITHUB_TOKEN_FIELD:-token}"
 TAGS="github,moye-source,token"
 

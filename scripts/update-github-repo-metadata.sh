@@ -7,7 +7,7 @@ DESCRIPTION="${GITHUB_REPO_DESCRIPTION:-Native macOS Markdown editor built with 
 HOMEPAGE="${GITHUB_REPO_HOMEPAGE:-https://github.com/moye-source/moye-md/releases/latest}"
 TOPICS_JSON='["macos","markdown","markdown-editor","swift","swiftui","appkit","native-macos","text-editor","writing","typora-alternative","open-source"]'
 
-TOKEN_REF="${OP_GITHUB_TOKEN_REF:-op://Private/GitHub moye-source API token/token}"
+TOKEN_REF="${OP_GITHUB_TOKEN_REF:-op://Private/GitHub Personal Access Token/token}"
 
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   if ! command -v op >/dev/null 2>&1; then
