@@ -1,97 +1,86 @@
 # Moye
 
-Moye (`墨页`) is a native macOS Markdown editor for focused local writing.
+Moye (`墨页`) is a native macOS Markdown editor for local writing.
 
-It is built with SwiftUI and AppKit. The editor uses an `NSTextView` core for reliable text input, selection, undo, and input-method behavior, while the preview is rendered separately in a `WKWebView`.
+It is built with SwiftUI and AppKit. The editing core uses `NSTextView` for stable text input, selection, undo, and input-method behavior. Live preview is rendered separately with `WKWebView`.
 
 [中文说明](README.zh-CN.md) · [Disclaimer](DISCLAIMER.md) · [License](LICENSE)
 
 ## Status
 
-Moye is an early open-source project. It is usable for local Markdown editing, but it is not a polished production release yet.
+Moye is an early open-source project. It can already be used for local Markdown editing, but it is not a polished stable release yet.
 
-The current goal is straightforward: build a document-first Mac Markdown editor that feels native, keeps local files under the user's control, and gradually evolves toward a more Typora-like editing experience without hiding unfinished architecture behind UI.
+The project goal is to build a document-first Mac Markdown editor: native menus, local files, reliable editing, live preview, practical export, and a gradual path toward a more Typora-like writing experience.
 
 ## Download
 
-Download packaged builds from GitHub Releases:
+Download the latest macOS build from GitHub Releases:
 
 <https://github.com/moye-source/moye-md/releases>
 
-Release assets are distributed as macOS `.zip` files, for example:
+Current package format:
 
 ```text
 Moye-0.1.0-macOS.zip
 ```
 
-The app is currently unsigned and not notarized. On macOS, Gatekeeper may warn that the app cannot be opened because the developer cannot be verified. Only run builds you trust. See [Disclaimer](DISCLAIMER.md).
+The app is currently unsigned and not notarized. macOS may show a Gatekeeper warning the first time you open it. Only run builds you trust. See [Disclaimer](DISCLAIMER.md).
 
-## Online Updates
+## Updates
 
-Moye can check for updates from GitHub Releases.
+Use **Help > Check for Updates...** in the app to check whether a newer build is available.
 
-The app reads:
+## Feature Status
 
-```text
-https://api.github.com/repos/moye-source/moye-md/releases/latest
-```
-
-If a newer release exists, Moye opens the release download page or the matching release asset URL. It does not silently replace the app. A full automatic updater may be added later after code signing, notarization, and update-feed verification are in place.
-
-## Features
-
-- Native macOS app target through Xcode
-- Chinese and English UI strings, with Chinese as the default language
-- Local Markdown source editing with AppKit `NSTextView`
-- Syntax highlighting for common Markdown constructs
-- Split, editor-only, and preview-only modes
-- Draggable split view between editor and preview
-- Live HTML preview
-- Source-line based editor/preview scroll sync
-- Document outline generated from headings
-- Folder sidebar with full file tree browsing
-- File name and content search
-- Quick Open
-- Unsaved document state
-- Undo, redo, cut, copy, paste, select all, find, and replace
-- Standard macOS menu commands
-- Settings from the app menu with `Command-,`
-- Insert commands for headings, table of contents, code blocks, tables, task lists, and images
-- Local image paste and drag/drop into an `assets/` folder
-- Table row and column editing helpers
-- HTML, PDF, plain HTML, PNG, and Pandoc export entries
-- Front matter, tables, task lists, footnotes, links, local images, and common inline styles in preview
-- MathJax preview for inline and block math
-- Mermaid preview for `mermaid` code fences
-- Focus mode, typewriter mode, line numbers, and auto-pair insertion
-- Word, character, line, and reading-time statistics
+- [x] Native macOS app through Xcode
+- [x] Chinese and English UI strings, with Chinese as the default language
+- [x] Local Markdown source editing
+- [x] `NSTextView`-based editor core
+- [x] Markdown syntax highlighting
+- [x] Split, editor-only, and preview-only modes
+- [x] Draggable split view between editor and preview
+- [x] Live HTML preview
+- [x] Source-line based editor/preview scroll sync
+- [x] Document outline generated from headings
+- [x] Folder sidebar with full file tree browsing
+- [x] File name and file content search
+- [x] Quick Open
+- [x] Unsaved document state
+- [x] Undo, redo, cut, copy, paste, select all, find, and replace
+- [x] Standard macOS menu commands
+- [x] Settings from the app menu with `Command-,`
+- [x] Insert commands for headings, table of contents, code blocks, tables, task lists, and images
+- [x] Local image paste and drag/drop into an `assets/` folder
+- [x] Table row and column editing helpers
+- [x] HTML, PDF, plain HTML, PNG, and Pandoc export entries
+- [x] Front matter, tables, task lists, footnotes, links, local images, and common inline styles in preview
+- [x] MathJax preview for inline and block math
+- [x] Mermaid preview for `mermaid` code fences
+- [x] Focus mode, typewriter mode, line numbers, and auto-pair insertion
+- [x] Word, character, line, and reading-time statistics
+- [x] Manual update checking
+- [ ] Signed and notarized releases
+- [ ] Fully automatic in-app updates
+- [ ] Offline bundled MathJax and Mermaid assets
+- [ ] A Markdown AST pipeline for more reliable editing tools
+- [ ] Typora-like source-token hiding mode
+- [ ] More complete UI automation tests
 
 ## Requirements
 
+For users:
+
 - macOS 13 or later
-- Xcode with the macOS SDK for development
 - Optional: `pandoc` for Pandoc-based import/export
 
-The supported project entry is:
+For development:
 
-```text
-NativeMarkdownEditor.xcodeproj
-```
+- Xcode with the macOS SDK
+- The supported project entry is `NativeMarkdownEditor.xcodeproj`
 
 Older Swift Package prototype entry points have been removed. Do not use `swift run`, `swift build`, or `.build/NativeMarkdownEditor.app` for real app testing.
 
-## External Runtime Notes
-
-Moye is a native app, but a few preview/export features currently depend on external tools or online assets:
-
-- Math preview loads MathJax from jsDelivr.
-- Mermaid preview loads Mermaid from jsDelivr.
-- Pandoc import/export requires a local `pandoc` executable available from the app process.
-- Update checking reads public GitHub Releases metadata.
-
-Offline-bundled MathJax/Mermaid assets, better Pandoc path configuration, and a more complete update system are planned.
-
-## Build
+## Development
 
 Open in Xcode:
 
@@ -120,7 +109,7 @@ Package a release zip:
 ./scripts/package-macos.sh 0.1.0
 ```
 
-The zip will be written to:
+Output:
 
 ```text
 dist/Moye-0.1.0-macOS.zip
@@ -128,9 +117,7 @@ dist/Moye-0.1.0-macOS.zip
 
 ## Release Flow
 
-GitHub Actions is configured to create a release asset when a tag starting with `v` is pushed.
-
-Example:
+GitHub Actions creates a release asset when a tag starting with `v` is pushed.
 
 ```bash
 git tag v0.1.0
@@ -153,7 +140,7 @@ Sources/NativeMarkdownEditor/
   NativeMarkdownEditorApp.swift   App entry point and menu commands
 
 Tests/NativeMarkdownEditorTests/
-  MarkdownEditorInputTests.swift  Core editor, renderer, file, update, and preview tests
+  MarkdownEditorInputTests.swift  Editor, renderer, file, update, and preview tests
 
 docs/
   branding/                       Name and visual direction
@@ -166,24 +153,8 @@ docs/
 - Menu commands are the main command surface.
 - The sidebar is for navigation, not duplicated system actions.
 - Text input, selection, undo, and IME behavior should be handled by AppKit where SwiftUI is not precise enough.
-- The HTML preview is separate from the editor core.
-- Typora-style editing requires a real Markdown structure and selection mapping, not string-replacement tricks.
-
-## Roadmap
-
-- Stabilize window lifecycle and launch behavior
-- Improve open/save prompts and document-state handling
-- Replace the lightweight renderer with a Markdown AST pipeline
-- Improve table editing beyond snippet insertion
-- Add robust image asset management and broken-path repair
-- Bundle MathJax and Mermaid for offline preview
-- Improve Pandoc path discovery and settings
-- Add signed and notarized macOS releases
-- Add automatic update verification
-- Add automated UI tests for open, save, export, search, and navigation flows
-- Prototype a source-token hiding mode for a Typora-like single-pane editor
-
-See [`docs/typora-feature-parity.md`](docs/typora-feature-parity.md) for feature parity tracking.
+- The editor core and HTML preview should stay separated.
+- Typora-style editing requires Markdown structure and selection mapping, not simple string replacement.
 
 ## Contributing
 
