@@ -4,7 +4,7 @@
 
 项目使用 SwiftUI 和 AppKit 开发。编辑器核心基于 `NSTextView`，用于保证文字输入、选区、撤销栈和中文输入法体验；右侧预览使用独立的 `WKWebView` 渲染。
 
-[English README](README.md) · [免责声明](DISCLAIMER.md) · [许可证](LICENSE) · [推广素材](docs/promotion-kit.zh-CN.md)
+[English README](README.md) · [免责声明](DISCLAIMER.md) · [许可证](LICENSE)
 
 ## 当前状态
 
@@ -178,5 +178,3 @@ xcodebuild -project NativeMarkdownEditor.xcodeproj -scheme NativeMarkdownEditor 
 ## 许可证
 
 墨页使用 [MIT License](LICENSE) 开源。
-
-如果你喜欢原生 macOS 写作工具，欢迎 star、试用、提交 issue 或参与贡献。
