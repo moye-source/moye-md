@@ -926,6 +926,41 @@ final class MarkdownEditorInputTests: XCTestCase {
         XCTAssertEqual(resolvedURL?.path, secondURL.standardizedFileURL.path)
     }
 
+    func testApplicationInstallPromptSkipsApplicationsFolderAndDevBundle() {
+        let applicationsURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        let releaseAppURL = applicationsURL.appendingPathComponent("Moye.app", isDirectory: true)
+        let devAppURL = URL(fileURLWithPath: "/Users/test/Downloads/Moye Dev.app", isDirectory: true)
+
+        XCTAssertFalse(ApplicationInstallManager.shouldOfferMoveToApplications(
+            bundleURL: releaseAppURL,
+            bundleIdentifier: "org.moyesource.moye",
+            applicationsDirectory: applicationsURL
+        ))
+        XCTAssertFalse(ApplicationInstallManager.shouldOfferMoveToApplications(
+            bundleURL: devAppURL,
+            bundleIdentifier: "org.moyesource.moye.dev",
+            applicationsDirectory: applicationsURL
+        ))
+    }
+
+    func testApplicationInstallPromptOffersDownloadedReleaseApp() {
+        let applicationsURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        let downloadedAppURL = URL(fileURLWithPath: "/Users/test/Downloads/Moye.app", isDirectory: true)
+
+        XCTAssertTrue(ApplicationInstallManager.shouldOfferMoveToApplications(
+            bundleURL: downloadedAppURL,
+            bundleIdentifier: "org.moyesource.moye",
+            applicationsDirectory: applicationsURL
+        ))
+        XCTAssertEqual(
+            ApplicationInstallManager.destinationURL(
+                for: downloadedAppURL,
+                applicationsDirectory: applicationsURL
+            ).path,
+            "/Applications/Moye.app"
+        )
+    }
+
     func testOpenDocumentAtURLLoadsLargeMarkdownForExternalOpenEvents() throws {
         let folderURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -455,6 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 window.makeKeyAndOrderFront(nil)
             }
         }
+        scheduleMoveToApplicationsPrompt()
         scheduleMenuLocalizationRetries()
     }
 
@@ -524,6 +525,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 MainMenuLocalizer.localize(language: self?.documentStore?.language ?? .chinese)
             }
         }
+    }
+
+    private func scheduleMoveToApplicationsPrompt() {
+        #if DEBUG
+        return
+        #else
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            ApplicationInstallManager.offerMoveToApplicationsIfNeeded(
+                language: self?.documentStore?.language ?? .chinese
+            )
+        }
+        #endif
     }
 }
 
